@@ -81,16 +81,17 @@ Deno.serve(async (request) => {
   const serviceClient = createClient(supabaseUrl, serviceKey);
   const { data: projects, error: projectError } = await serviceClient
     .from("projects")
-    .select("id,repo_url,default_branch,scan_on_push")
-    .ilike("repo_owner", owner)
-    .ilike("repo_name", repositoryName);
+    .select("id,repo_url,repo_owner,repo_name,default_branch,scan_on_push");
   if (projectError) {
     console.error("Could not resolve projects for GitHub push:", projectError.message);
     return jsonResponse({ error: "Unable to resolve the repository in SoftPulse." }, 500);
   }
 
   const matchingProjects = (projects ?? []).filter((project: any) =>
-    project.scan_on_push !== false && String(project.default_branch ?? "main").toLowerCase() === branch.toLowerCase()
+    String(project.repo_owner ?? "").toLowerCase() === owner.toLowerCase()
+    && String(project.repo_name ?? "").toLowerCase() === repositoryName.toLowerCase()
+    && project.scan_on_push !== false
+    && String(project.default_branch ?? "main") === branch
   );
   if (!matchingProjects.length) {
     return jsonResponse({ accepted: true, queued: 0, ignored: "no_enabled_default_branch_project" }, 202);
