@@ -83,7 +83,7 @@ const demoMetrics: MetricRecord[] = [
 })));
 
 const demoModules: Module[] = moduleNames.map((m, i) => ({
-  id: "m" + (i + 1), scan_id: "s1", project_id: i < 6 ? "p1" : i < 10 ? "p2" : "p3",
+  id: "m" + (i + 1), scan_id: i < 6 ? "s1" : i < 10 ? "s2" : "s4", project_id: i < 6 ? "p1" : i < 10 ? "p2" : "p3",
   path: m[0], language: m[1], lines_of_code: m[2], risk: m[3] as Risk, risk_probability: m[4],
   estimated_refactor_hours: m[5], technical_debt_ratio: m[6], complexity: 6 + i * 2, coverage: Math.max(42, 94 - i * 4), smells: i + 1
 }));
