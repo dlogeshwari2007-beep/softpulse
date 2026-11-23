@@ -248,6 +248,45 @@ export default function App() {
     return () => data.subscription.unsubscribe();
   }, [loadWorkspace]);
 
+  useEffect(() => {
+    if (!supabase || !userId || demoMode) {
+      setRealtimeStatus("offline");
+      return;
+    }
+
+    setRealtimeStatus("connecting");
+    const channel = supabase
+      .channel("softpulse-scans-" + userId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "scans" }, (payload) => {
+        if (payload.eventType === "DELETE") {
+          const deleted = payload.old as { id?: string };
+          if (deleted.id) setScans((current) => current.filter((scan) => scan.id !== deleted.id));
+          return;
+        }
+        const changedScan = payload.new as Scan;
+        if (!changedScan?.id) return;
+        setScans((current) => {
+          const exists = current.some((scan) => scan.id === changedScan.id);
+          return exists
+            ? current.map((scan) => scan.id === changedScan.id ? { ...scan, ...changedScan } : scan)
+            : [changedScan, ...current];
+        });
+        if (changedScan.status === "completed") {
+          void loadWorkspace(userId);
+        }
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setRealtimeStatus("connected");
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setRealtimeStatus("error");
+        else if (status === "CLOSED") setRealtimeStatus("offline");
+      });
+
+    return () => {
+      setRealtimeStatus("offline");
+      void supabase.removeChannel(channel);
+    };
+  }, [userId, demoMode, loadWorkspace]);
+
   const notify = (message: string) => setToast(message);
   const isAdmin = demoMode || role === "admin";
   const canScan = demoMode || ["admin", "manager", "engineer"].includes(role);
