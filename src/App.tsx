@@ -81,7 +81,7 @@ const demoMetrics: MetricRecord[] = [
 ].map(([metric_key, raw_value, normalized_score, weight]) => ({
   scan_id: "s1", metric_key: String(metric_key), raw_value: Number(raw_value),
   normalized_score: Number(normalized_score), weight: Number(weight)
-})));
+}));
 
 const demoModules: Module[] = moduleNames.map((m, i) => ({
   id: "m" + (i + 1), scan_id: i < 6 ? "s1" : i < 10 ? "s2" : "s4", project_id: i < 6 ? "p1" : i < 10 ? "p2" : "p3",
