@@ -783,26 +783,65 @@ export default function App() {
     const scan = selectedScan || scans[0];
     const project = scan ? getProject(projects, scan.project_id) : undefined;
     const scanModules = scan ? modules.filter((module) => module.scan_id === scan.id) : [];
+    const scanMetricCount = scan ? metricRows.filter((metric) => metric.scan_id === scan.id && !metric.module_id).length : 0;
+    const stages = ["Clone", "Parse", "Measure", "Score", "Report"];
+    const stageIndex = Math.max(0, stages.indexOf(scan?.current_stage || "Clone"));
+    const scanIsActive = scan ? ["queued", "running"].includes(scan.status) : false;
+    const progress = Math.max(0, Math.min(100, scan?.progress ?? 0));
+    const logEntries = scan?.progress_log ?? [];
+    const statusLabel = scan?.status === "completed" ? "Completed" : scan?.status === "failed" ? "Failed" : scan?.status === "cancelled" ? "Cancelled" : scan?.status === "queued" ? "Queued" : "Running";
+    const connectionLabel = demoMode ? "Demo simulation" : realtimeStatus === "connected" ? "Live updates connected" : realtimeStatus === "connecting" ? "Connecting to Realtime" : realtimeStatus === "error" ? "Reconnecting…" : "Realtime offline";
     return <div className="page-stack">
       {scan ? <>
         <div className="scan-detail-header card">
-          <div className="scan-title-line"><div><div className="eyebrow muted">ASSESSMENT REPORT</div><h2>{project?.name || "Repository scan"}</h2><a className="repo-url" href={project?.repo_url} target="_blank" rel="noreferrer">{project?.repo_url || "Repository details unavailable"} <ExternalLink size={12} /></a></div><GradeBadge grade={scan.grade || gradeFrom(scan.health_score)} /></div>
-          <div className="scan-meta-grid"><div><span>Scan ID</span><strong>{scan.id}</strong></div><div><span>Commit</span><strong>{(scan.commit_sha || "—").slice(0, 8)}</strong></div><div><span>Author</span><strong>{scan.commit_author || "SoftPulse"}</strong></div><div><span>Scanned</span><strong>{formatDate(scan.created_at)}</strong></div></div>
-          <div className="commit-message"><GitBranch size={15} /><span>{scan.commit_message || "Repository health assessment"}</span><span className="status-complete"><Check size={13} /> {scan.status}</span></div>
+          <div className="scan-title-line">
+            <div><div className="eyebrow muted">ASSESSMENT REPORT</div><h2>{project?.name || "Repository scan"}</h2><a className="repo-url" href={project?.repo_url} target="_blank" rel="noreferrer">{project?.repo_url || "Repository details unavailable"} <ExternalLink size={12} /></a></div>
+            {scan.health_score !== undefined && scan.health_score !== null ? <GradeBadge grade={scan.grade || gradeFrom(scan.health_score)} /> : <span className="grade-pending">GRADE PENDING</span>}
+          </div>
+          <div className="scan-meta-grid"><div><span>Scan ID</span><strong>{scan.id}</strong></div><div><span>Commit</span><strong>{(scan.commit_sha || "Pending")?.slice(0, 8)}</strong></div><div><span>Author</span><strong>{scan.commit_author || "SoftPulse"}</strong></div><div><span>Started</span><strong>{formatDate(scan.started_at || scan.created_at)}</strong></div></div>
+          <div className="commit-message"><GitBranch size={15} /><span>{scan.commit_message || "Repository health assessment"}</span><span className={scan.status === "completed" ? "status-complete" : scanIsActive ? "status-running" : scan.status === "failed" ? "status-failed" : "status-cancelled"}>{scanIsActive ? <Activity size={13} /> : scan.status === "completed" ? <Check size={13} /> : <AlertCircle size={13} />}{statusLabel}</span></div>
         </div>
         <div className="scan-stage-card card">
-          <div className="card-heading"><div><h2>Scan pipeline</h2><p>Five stages from repository inspection to the final health report.</p></div><span className="status-complete"><Check size={13} /> Completed</span></div>
-          <div className="scan-stepper">{["Clone", "Parse", "Measure", "Score", "Report"].map((stage, i) => <div className="scan-step" key={stage}><div className="step-node"><Check size={15} /></div><strong>{stage}</strong><small>{i === 0 ? "Repository fetched" : i === 1 ? "Source parsed" : i === 2 ? "12 metrics measured" : i === 3 ? "Weighted score" : "Report ready"}</small></div>)}</div>
-          <div className="step-progress"><span style={{ width: "100%" }} /></div>
-          <div className="pipeline-note"><span>Latest scan is complete.</span><span>Live progress, current-file streaming and cancellation will be added in Step 1.</span></div>
+          <div className="card-heading">
+            <div><h2>Scan pipeline</h2><p>Clone → Parse → Measure → Score → Report. Progress is shared through the scans table.</p></div>
+            <span className={"realtime-indicator " + (demoMode ? "demo" : realtimeStatus)}><i />{connectionLabel}</span>
+          </div>
+          <div className="scan-stepper">{stages.map((stage, i) => {
+            const stageDone = scan.status === "completed" || i < stageIndex;
+            const stageCurrent = scanIsActive && i === stageIndex;
+            return <div className={"scan-step " + (stageDone ? "done" : stageCurrent ? "current" : "")} key={stage}>
+              <div className="step-node">{stageDone ? <Check size={15} /> : stageCurrent ? <span className="step-pulse" /> : <span>{i + 1}</span>}</div>
+              <strong>{stage}</strong>
+              <small>{stageDone ? "Complete" : stageCurrent ? "In progress" : scan.status === "cancelled" ? "Stopped" : "Waiting"}</small>
+            </div>;
+          })}</div>
+          <div className="scan-progress-heading"><strong>{progress}%</strong><span>{scanIsActive ? (scan.current_stage || "Preparing") + " stage" : statusLabel}</span><span>{scanMetricCount ? scanMetricCount + " metrics received" : "Waiting for metrics"}</span></div>
+          <div className="step-progress live-progress"><span style={{ width: progress + "%" }} /></div>
+          <div className="pipeline-note"><span>{scanIsActive ? "The scan is running. This view updates automatically." : scan.status === "completed" ? "Latest scan is complete." : scan.status === "cancelled" ? "This scan was cancelled. Partial progress has been retained." : scan.status === "failed" ? (scan.error_message || "The scan could not be completed.") : "The scan is waiting to start."}</span>
+            {scanIsActive && scan.current_file ? <span className="current-file"><FileCode2 size={13} /> {scan.current_file}</span> : <span>{scan.completed_at ? "Finished " + formatDate(scan.completed_at) : "No refresh required"}</span>}
+          </div>
+          {scanIsActive && canScan && <div className="scan-control-row"><span>Canceling stops the analyzer at its next checkpoint.</span><button className="button-danger" onClick={() => void cancelSelectedScan()}><X size={14} /> Cancel scan</button></div>}
+          {scan.status === "failed" && <div className="scan-error-panel" role="alert"><AlertTriangle size={15} /><span>{scan.error_message || "Scan failed. Review the scan logs and try again."}</span><button className="quiet-button" onClick={() => project && void startScan(project)}><RefreshCw size={13} /> Retry scan</button></div>}
+        </div>
+        <div className="card live-log-card">
+          <div className="card-heading"><div><h2>Live scan activity</h2><p>Stage messages, files and metric measurements from this assessment.</p></div><span className="log-count">{logEntries.length} events</span></div>
+          <div className="scan-log" ref={scanLogRef} role="log" aria-live="polite" aria-relevant="additions text" aria-label="Scan progress log">
+            {logEntries.length ? logEntries.map((entry, index) => <div className="scan-log-entry" key={scan.id + "-log-" + index}>
+              <span className="log-time">{entry.at ? new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "--:--:--"}</span>
+              <span className="log-stage">{entry.stage || "Scan"}</span>
+              <span className="log-message">{entry.message}</span>
+              {typeof entry.progress === "number" && <span className="log-progress">{entry.progress}%</span>}
+            </div>) : <div className="scan-log-empty">The scan log will appear here as the analyzer sends progress updates.</div>}
+          </div>
+          <div className="log-footnote"><span><i /> Screen-reader announcements are enabled for new scan events.</span><span>{demoMode ? "Local demo stream" : "Supabase Realtime"}</span></div>
         </div>
         <div className="content-grid scan-results-grid">
-          <div className="card results-score-card"><div className="eyebrow muted">HEALTH SCORE</div><ScoreGauge score={scan.health_score ?? 87} /><p>Score combines the 12 normalised code-quality metrics using the weights in Settings.</p></div>
+          <div className="card results-score-card"><div className="eyebrow muted">{scanIsActive ? "LIVE HEALTH SCORE" : "HEALTH SCORE"}</div>{scan.health_score !== undefined && scan.health_score !== null ? <ScoreGauge score={scan.health_score} /> : <div className="score-pending"><Activity size={20} /><strong>Waiting for metrics</strong><span>Your health gauge will fill as measurements arrive.</span></div>}<p>Score combines the 12 normalised code-quality metrics using the weights in Settings.</p></div>
           <div className="card results-overview"><div className="card-heading"><div><h2>Assessment summary</h2><p>Current results from the selected scan.</p></div></div><div className="summary-stat-grid">
-            <div><strong>12</strong><span>Metrics measured</span></div><div><strong>{scanModules.length}</strong><span>Modules analysed</span></div><div><strong>{scanModules.filter((m) => m.risk === "high").length}</strong><span>High-risk modules</span></div><div><strong>{scanModules.reduce((sum, m) => sum + m.estimated_refactor_hours, 0)}h</strong><span>Refactoring estimate</span></div>
-          </div><div className="plain-explain"><Sparkles size={16} /><p><strong>What this means:</strong> a higher score indicates a more maintainable repository. A-grade projects score 85 or above; lower grades identify where engineering effort may have the greatest return.</p></div></div>
+            <div><strong>{scanMetricCount || (scan.status === "completed" ? 12 : "—")}</strong><span>Metrics received</span></div><div><strong>{scanModules.length || (scanIsActive ? "—" : 0)}</strong><span>Modules analysed</span></div><div><strong>{scanModules.filter((m) => m.risk === "high").length || (scanIsActive ? "—" : 0)}</strong><span>High-risk modules</span></div><div><strong>{scanModules.reduce((sum, m) => sum + m.estimated_refactor_hours, 0) || (scanIsActive ? "—" : 0)}h</strong><span>Refactoring estimate</span></div>
+          </div><div className="plain-explain"><Sparkles size={16} /><p><strong>What this means:</strong> the live score is a partial weighted score while metrics arrive. The final grade is assigned after all 12 metrics have been processed.</p></div></div>
         </div>
-        <div className="card recent-card"><div className="card-heading"><div><h2>Modules in this assessment</h2><p>Review module health and open the full report.</p></div><button className="quiet-button" onClick={() => changePage("modules")}>Open module report <ArrowRight size={14} /></button></div>{scanModules.length ? <ModuleTable modules={scanModules.slice(0, 5)} onSelect={(m) => { changePage("modules"); setSelectedModule(m); }} /> : <EmptyState icon={<FileCode2 size={22} />} title="No module details for this scan" copy="The scan has no saved module measurements. Run a new scan after deploying the run-scan function." />}</div>
+        <div className="card recent-card"><div className="card-heading"><div><h2>Modules in this assessment</h2><p>Review module health and open the full report.</p></div><button className="quiet-button" onClick={() => changePage("modules")}>Open module report <ArrowRight size={14} /></button></div>{scanModules.length ? <ModuleTable modules={scanModules.slice(0, 5)} onSelect={(m) => { changePage("modules"); setSelectedModule(m); }} /> : <EmptyState icon={<FileCode2 size={22} />} title={scanIsActive ? "Module details are being prepared" : "No module details for this scan"} copy={scanIsActive ? "Module risk results appear after the scoring stage." : "The scan has no saved module measurements. Run a new scan after deploying the run-scan function."} />}</div>
       </> : <div className="card"><EmptyState icon={<Activity size={22} />} title="No scans yet" copy="Add a public GitHub repository to prepare your first assessment." /><button className="button-primary centered-button" onClick={() => changePage("projects")}>View projects</button></div>}
     </div>;
   };
