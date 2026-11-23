@@ -252,7 +252,8 @@ export default function App() {
   }, [loadWorkspace]);
 
   useEffect(() => {
-    if (!supabase || !userId || demoMode) {
+    const realtimeClient = supabase;
+    if (!realtimeClient || !userId || demoMode) {
       setRealtimeStatus("offline");
       return;
     }
@@ -266,7 +267,7 @@ export default function App() {
     };
 
     setRealtimeStatus("connecting");
-    const channel = supabase
+    const channel = realtimeClient
       .channel("softpulse-workspace-" + userId)
       .on("postgres_changes", { event: "*", schema: "public", table: "scans" }, (payload) => {
         if (payload.eventType === "DELETE") {
@@ -314,7 +315,7 @@ export default function App() {
         workspaceRefreshTimer.current = null;
       }
       setRealtimeStatus("offline");
-      void supabase.removeChannel(channel);
+      void realtimeClient.removeChannel(channel);
     };
   }, [userId, demoMode, loadWorkspace]);
 
