@@ -21,7 +21,7 @@ type Mode = "signin" | "signup" | "reset";
 type Project = { id: string; name: string; repo_url: string; repo_owner?: string; repo_name?: string; default_branch?: string; created_at?: string; grade?: string; health_score?: number; last_scan?: string; trend?: number };
 type Scan = { id: string; project_id: string; status: string; progress?: number; health_score?: number; grade?: string; commit_sha?: string; commit_message?: string; commit_author?: string; created_at?: string; started_at?: string; completed_at?: string };
 type Module = { id: string; scan_id?: string; project_id?: string; path: string; language?: string; lines_of_code: number; risk: Risk; risk_probability: number; estimated_refactor_hours: number; technical_debt_ratio: number; complexity?: number; coverage?: number; smells?: number };
-type MetricRecord = { scan_id: string; metric_key: string; raw_value: number | null; normalized_score: number; weight: number };
+type MetricRecord = { scan_id: string; module_id?: string | null; metric_key: string; raw_value: number | null; normalized_score: number; weight: number };
 
 const metricWeights = [
   { key: "lines_of_code", label: "Lines of code", weight: 4, direction: "Lower is better", note: "Large modules are harder to understand and change." },
@@ -188,7 +188,7 @@ export default function App() {
         supabase.from("scans").select("*").order("created_at", { ascending: false }).limit(100),
         supabase.from("modules").select("*").order("risk_probability", { ascending: false }).limit(200),
         supabase.from("user_roles").select("role").eq("user_id", id).maybeSingle(),
-        supabase.from("metrics").select("scan_id,metric_key,raw_value,normalized_score,weight").order("measured_at", { ascending: false }).limit(500)
+        supabase.from("metrics").select("scan_id,module_id,metric_key,raw_value,normalized_score,weight").order("measured_at", { ascending: false }).limit(500)
       ]);
       if (projectResult.error) throw projectResult.error;
       if (scanResult.error) throw scanResult.error;
@@ -250,6 +250,10 @@ export default function App() {
   const latestMetricValue = (key: string, fallback: number) => {
     if (!scans.length) return "—";
     const row = metricRows.find((metric) => metric.scan_id === scans[0].id && metric.metric_key === key);
+    return row ? (row.raw_value ?? "N/A") : fallback;
+  };
+  const selectedModuleMetricValue = (key: string, fallback: ReactNode) => {
+    const row = metricRows.find((metric) => metric.module_id === selectedModule?.id && metric.metric_key === key);
     return row ? (row.raw_value ?? "N/A") : fallback;
   };
   const trendChartData = [...scans]
