@@ -1,4 +1,4 @@
-# SoftPulse — Phase 2 base application
+# SoftPulse — Software Health, Quality and Maintenance Assessment
 
 A responsive React + TypeScript + Vite foundation for software health, quality and maintenance assessment.
 
@@ -64,13 +64,13 @@ supabase functions deploy run-scan
 supabase functions deploy github-webhook
 ```
 
-Set two independent secrets. `GITHUB_WEBHOOK_SECRET` must match the secret configured in GitHub. `SOFTPULSE_INTERNAL_WEBHOOK_SECRET` authorises the webhook function to invoke the private scan worker with the service-role JWT. Generate two random values (for example, with `openssl rand -hex 32`) and set them:
+Set two independent secrets. `GITHUB_WEBHOOK_SECRET` must match the secret configured in GitHub. `SOFTPULSE_INTERNAL_WEBHOOK_SECRET` authorises the webhook function to invoke the private scan worker with the service-role API key. Generate two random values (for example, with `openssl rand -hex 32`) and set them:
 
 ```bash
 supabase secrets set GITHUB_WEBHOOK_SECRET="YOUR_GITHUB_WEBHOOK_SECRET" SOFTPULSE_INTERNAL_WEBHOOK_SECRET="YOUR_INTERNAL_WORKER_SECRET"
 ```
 
-Keep both values private; neither belongs in Vite environment variables. The included `supabase/config.toml` disables JWT verification only for `github-webhook`; that public endpoint validates GitHub’s HMAC signature itself.
+Keep both values private; neither belongs in Vite environment variables. The included `supabase/config.toml` disables the gateway JWT check for `github-webhook` and `run-scan`; `run-scan` still validates a signed-in user or the private internal secret plus service-role API key, while `github-webhook` verifies GitHub’s HMAC signature.
 
 For each GitHub repository, open **Settings → Webhooks → Add webhook**. Set Payload URL to `https://YOUR_PROJECT_REF.supabase.co/functions/v1/github-webhook`, Content type to `application/json`, paste the matching webhook secret, and select **Just the push event**. Only a push to the project’s configured default branch starts a scan. You can disable this per project with its **Auto-scan on push** switch.
 
@@ -78,7 +78,7 @@ The hosted function uses the Supabase URL, anon key and service-role key injecte
 
 ## Step 1 and Step 2 realtime / push setup
 
-Apply `0004_scan_realtime.sql` and `0005_push_automation.sql` before starting a scan. Supabase Realtime must be enabled for the project. Supabase Realtime must be enabled for the project, and the signed-in user needs read access to the scans table (the base migration provides authenticated scan reads through RLS). The Edge Function writes bounded progress-log events to each scan row. Cancellation changes the row status to `cancelled`; the worker stops at its next checkpoint. The browser-side cancel control is available only to admin, manager and engineer roles. This implementation is cooperative cancellation: an in-flight external HTTP request is not forcibly interrupted, but no further scan stages run after the next status check.
+Apply `0004_scan_realtime.sql` and `0005_push_automation.sql` before starting a scan. Supabase Realtime must be enabled for the project, and the signed-in user needs read access to the scans table (the base migration provides authenticated scan reads through RLS). The Edge Function writes bounded progress-log events to each scan row. Cancellation changes the row status to `cancelled`; the worker stops at its next checkpoint. The browser-side cancel control is available only to admin, manager and engineer roles. This implementation is cooperative cancellation: an in-flight external HTTP request is not forcibly interrupted, but no further scan stages run after the next status check.
 
 ## Measurement notes
 
