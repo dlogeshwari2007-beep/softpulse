@@ -19,8 +19,9 @@ Open the local URL printed by Vite. Without Supabase environment variables, Soft
 2. Run `supabase/migrations/0001_base_schema.sql` in SQL Editor.
 3. Register your first account through SoftPulse. The database trigger assigns admin only if the role table is empty; later accounts receive viewer.
 4. Run `supabase/migrations/0002_demo_seed.sql` in SQL Editor to seed 3 projects, 8 scans, 40 modules and their sample metrics for the first registered user.
-5. Enable Email authentication and add local/Vercel URLs to the allowed redirect URLs.
-6. Add your project URL and anon/public key to `.env.local`. Never expose the service-role key in the browser.
+5. Run `supabase/migrations/0003_first_admin_race_safety.sql` to serialize concurrent first-user registration checks.
+6. Enable Email authentication and add local/Vercel URLs to the allowed redirect URLs.
+7. Add your project URL and anon/public key to `.env.local`. Never expose the service-role key in the browser.
 
 ## Phase 2 screens
 
