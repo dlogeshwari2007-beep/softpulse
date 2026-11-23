@@ -95,7 +95,7 @@ const gradeFrom = (score?: number) => !Number.isFinite(score) ? "—" : (score! 
 const gradeClass = (grade?: string) => "grade-" + (grade || "C").toLowerCase();
 const riskClass = (risk: Risk) => "risk-" + risk;
 const formatDate = (value?: string) => value ? new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
-const getProject = (projects: Project[], id: string) => projects.find((p) => p.id === id);
+const getProject = (projects: Project[], id?: string) => projects.find((p) => p.id === id);
 
 function GradeBadge({ grade }: { grade?: string }) {
   return <span className={"grade-badge " + gradeClass(grade)}><span>{grade || "—"}</span><small>GRADE</small></span>;
