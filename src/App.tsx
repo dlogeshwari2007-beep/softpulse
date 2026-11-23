@@ -241,6 +241,9 @@ export default function App() {
       const feedError = notificationResult.error || activityResult.error || preferenceResult.error;
       if (feedError) {
         setNotificationError("Apply migration 0006_notifications_activity.sql to enable saved notifications.");
+        setNotifications([]);
+        setActivityEvents([]);
+        setNotificationPreferences(defaultNotificationPreferences);
       } else {
         setNotificationError("");
         setNotifications((notificationResult.data ?? []) as NotificationItem[]);
