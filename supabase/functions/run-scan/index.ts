@@ -24,6 +24,17 @@ class ScanCancelled extends Error {
   }
 }
 
+function constantTimeEqual(leftValue: string, rightValue: string) {
+  const left = new TextEncoder().encode(leftValue);
+  const right = new TextEncoder().encode(rightValue);
+  let difference = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index++) {
+    difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  }
+  return difference === 0;
+}
+
 function sourceLines(source: string) {
   return source.split(/\r?\n/).filter((line) => line.trim().length > 0);
 }
@@ -142,16 +153,24 @@ Deno.serve(async (request) => {
   }
 
   const authorization = request.headers.get("Authorization");
-  if (!authorization) return new Response(JSON.stringify({ error: "Authentication required." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  const internalSecret = Deno.env.get("SOFTPULSE_INTERNAL_WEBHOOK_SECRET") ?? "";
+  const suppliedInternalSecret = request.headers.get("x-softpulse-internal-secret") ?? "";
+  const internalWebhookCall = Boolean(internalSecret)
+    && constantTimeEqual(suppliedInternalSecret, internalSecret)
+    && authorization === `Bearer ${serviceKey}`;
 
-  const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } });
-  const { data: userResult, error: userError } = await userClient.auth.getUser();
-  if (userError || !userResult.user) return new Response(JSON.stringify({ error: "Invalid or expired session." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-
-  const { data: allowed, error: roleError } = await userClient.rpc("has_role", {
-    required_roles: ["admin", "manager", "engineer"]
-  });
-  if (roleError || !allowed) return new Response(JSON.stringify({ error: "Your workspace role cannot start scans." }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  let userResult: { user: { id: string } } | null = null;
+  if (!internalWebhookCall) {
+    if (!authorization) return new Response(JSON.stringify({ error: "Authentication required." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authorization } } });
+    const { data: authenticatedUser, error: userError } = await userClient.auth.getUser();
+    if (userError || !authenticatedUser.user) return new Response(JSON.stringify({ error: "Invalid or expired session." }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    const { data: allowed, error: roleError } = await userClient.rpc("has_role", {
+      required_roles: ["admin", "manager", "engineer"]
+    });
+    if (roleError || !allowed) return new Response(JSON.stringify({ error: "Your workspace role cannot start scans." }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    userResult = authenticatedUser as { user: { id: string } };
+  }
 
   const serviceClient = createClient(supabaseUrl, serviceKey);
   let scanId: string | null = null;
@@ -159,6 +178,8 @@ Deno.serve(async (request) => {
   try {
     const body = await request.json();
     const repoUrl = String(body.repo_url ?? "").trim().replace(/\/$/, "");
+    const requestedCommitSha = typeof body.commit_sha === "string" ? body.commit_sha.trim() : null;
+    if (requestedCommitSha && !/^[a-f0-9]{40,64}$/i.test(requestedCommitSha)) throw new Error("Invalid commit SHA supplied for this scan.");
     const repoMatch = repoUrl.match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
     if (!repoMatch) throw new Error("Enter a public GitHub repository URL.");
     const [, owner, repository] = repoMatch;
@@ -177,10 +198,13 @@ Deno.serve(async (request) => {
     const branch = repositoryInfo.default_branch || "main";
 
     let projectId = typeof body.project_id === "string" ? body.project_id : null;
+    if (internalWebhookCall && !projectId) throw new Error("Webhook scans must reference an existing workspace project.");
     if (projectId) {
-      const { data: project, error } = await serviceClient.from("projects").select("id,repo_url").eq("id", projectId).maybeSingle();
-      if (error || !project || project.repo_url.replace(/\/$/, "") !== repoUrl) throw new Error("Project does not match the submitted repository URL.");
+      const { data: project, error } = await serviceClient.from("projects").select("id,repo_url,scan_on_push").eq("id", projectId).maybeSingle();
+      if (error || !project || project.repo_url.replace(/\/$/, "").toLowerCase() !== repoUrl.toLowerCase()) throw new Error("Project does not match the submitted repository URL.");
+      if (internalWebhookCall && project.scan_on_push === false) throw new Error("Automatic scans are disabled for this project.");
     } else {
+      if (!userResult?.user?.id) throw new Error("An authenticated user is required to create a project.");
       const { data: existing } = await serviceClient.from("projects").select("id").eq("owner_id", userResult.user.id).eq("repo_url", repoUrl).maybeSingle();
       if (existing) projectId = existing.id;
       else {
@@ -199,6 +223,7 @@ Deno.serve(async (request) => {
 
     let scan: any;
     const requestedScanId = typeof body.scan_id === "string" ? body.scan_id : null;
+    if (internalWebhookCall && (!requestedScanId || !requestedCommitSha)) throw new Error("Webhook worker calls must provide a queued scan and commit SHA.");
     if (requestedScanId) {
       const { data: queuedScan, error: queuedScanError } = await serviceClient
         .from("scans")
@@ -206,12 +231,15 @@ Deno.serve(async (request) => {
         .eq("id", requestedScanId)
         .maybeSingle();
       if (queuedScanError) throw queuedScanError;
-      if (!queuedScan || queuedScan.project_id !== projectId || queuedScan.started_by !== userResult.user.id) {
-        throw new Error("The requested scan does not belong to your account and repository.");
+      if (!queuedScan || queuedScan.project_id !== projectId) throw new Error("The requested scan does not belong to this repository.");
+      if (internalWebhookCall) {
+        if (queuedScan.started_by !== null || queuedScan.trigger_source !== "push" || queuedScan.commit_sha !== requestedCommitSha) {
+          throw new Error("The internal push scan does not match its queued delivery.");
+        }
+      } else if (queuedScan.started_by !== userResult?.user?.id) {
+        throw new Error("The requested scan does not belong to your account.");
       }
-      if (!["queued", "running"].includes(queuedScan.status)) {
-        throw new Error("This scan is no longer available to run.");
-      }
+      if (queuedScan.status !== "queued") throw new Error("This scan has already been claimed or is no longer available.");
       scan = queuedScan;
       const { data: runningScan, error: runningError } = await serviceClient
         .from("scans")
@@ -227,11 +255,13 @@ Deno.serve(async (request) => {
         .select("*")
         .maybeSingle();
       if (runningError) throw runningError;
-      if (runningScan) scan = runningScan;
+      if (!runningScan) throw new Error("This scan was already claimed by another worker.");
+      scan = runningScan;
     } else {
       const { data: createdScan, error: scanError } = await serviceClient.from("scans").insert({
         project_id: projectId,
-        started_by: userResult.user.id,
+        started_by: userResult!.user.id,
+        trigger_source: body.trigger_source === "push" ? "push" : "manual",
         status: "running",
         progress: 4,
         current_stage: "Clone",
@@ -294,8 +324,11 @@ Deno.serve(async (request) => {
     };
 
     await updateStage(6, "Clone", null, "Repository metadata confirmed. Fetching the latest commit.");
-    const commitResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/commits/" + branch, { headers: githubHeaders });
+    const commitResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/commits/" + (requestedCommitSha ?? branch), { headers: githubHeaders });
+    if (requestedCommitSha && !commitResponse.ok) throw new Error("The pushed commit could not be read from GitHub.");
     const commit = commitResponse.ok ? await commitResponse.json() : null;
+    const contentRef = commit?.sha ?? branch;
+    const treeRef = commit?.commit?.tree?.sha ?? branch;
     await ensureScanActive();
     const { error: commitUpdateError } = await serviceClient.from("scans").update({
       commit_sha: commit?.sha ?? null,
@@ -306,7 +339,7 @@ Deno.serve(async (request) => {
     await ensureScanActive();
 
     await updateStage(14, "Parse", null, "Repository commit identified. Reading the recursive file tree.");
-    const treeResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/git/trees/" + branch + "?recursive=1", { headers: githubHeaders });
+    const treeResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/git/trees/" + treeRef + "?recursive=1", { headers: githubHeaders });
     if (!treeResponse.ok) throw new Error("Unable to read the repository tree from GitHub.");
     const tree = await treeResponse.json();
     const sourceExtensions = /\.(ts|tsx|js|jsx|mjs|cjs|py|java|go|cs|rb|php|rs|c|h|cpp|cc)$/i;
@@ -325,7 +358,7 @@ Deno.serve(async (request) => {
       const texts = await Promise.all(batch.map(async (entry: any) => {
         try {
           const pathUrl = entry.path.split("/").map(encodeURIComponent).join("/");
-          const source = await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(branch) + "/" + pathUrl, {});
+          const source = await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(contentRef) + "/" + pathUrl, {});
           return inspectSource(entry.path, source.slice(0, 1_000_000));
         } catch {
           return null;
@@ -354,7 +387,7 @@ Deno.serve(async (request) => {
     let coverage: number | null = null;
     if (coverageFile) {
       try {
-        const coverageText = await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(branch) + "/" + coverageFile.path.split("/").map(encodeURIComponent).join("/"), {});
+        const coverageText = await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(contentRef) + "/" + coverageFile.path.split("/").map(encodeURIComponent).join("/"), {});
         const found = Number((coverageText.match(/^LF:(\d+)/m) ?? [])[1] ?? 0);
         const hit = Number((coverageText.match(/^LH:(\d+)/m) ?? [])[1] ?? 0);
         if (found > 0) coverage = hit / found * 100;
@@ -364,10 +397,10 @@ Deno.serve(async (request) => {
     let packageJson: unknown = null;
     let packageLock: unknown = null;
     if (packageFile) {
-      try { packageJson = JSON.parse(await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(branch) + "/package.json", {})); } catch { packageJson = null; }
+      try { packageJson = JSON.parse(await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(contentRef) + "/package.json", {})); } catch { packageJson = null; }
     }
     if (lockFile) {
-      try { packageLock = JSON.parse(await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(branch) + "/package-lock.json", {})); } catch { packageLock = null; }
+      try { packageLock = JSON.parse(await fetchText("https://raw.githubusercontent.com/" + owner + "/" + repository + "/" + encodeURIComponent(contentRef) + "/package-lock.json", {})); } catch { packageLock = null; }
     }
     const dependencies = parseDependencies(packageJson, packageLock);
     const outdated = await countOutdated(dependencies);
