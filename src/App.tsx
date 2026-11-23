@@ -144,6 +144,7 @@ export default function App() {
   const [scans, setScans] = useState<Scan[]>(demoScans);
   const [modules, setModules] = useState<Module[]>(demoModules);
   const [metricRows, setMetricRows] = useState<MetricRecord[]>(demoMetrics);
+  const [weightRows, setWeightRows] = useState(metricWeights);
   const [users, setUsers] = useState<{ id: string; email: string; role: Role; display_name?: string }[]>([
     { id: "u1", email: "maya.chen@softpulse.dev", role: "admin", display_name: "Maya Chen" },
     { id: "u2", email: "arjun.rao@softpulse.dev", role: "engineer", display_name: "Arjun Rao" },
@@ -183,22 +184,25 @@ export default function App() {
     setLoading(true);
     setDataError("");
     try {
-      const [projectResult, scanResult, moduleResult, roleResult, metricResult] = await Promise.all([
+      const [projectResult, scanResult, moduleResult, roleResult, metricResult, weightResult] = await Promise.all([
         supabase.from("projects").select("*").order("created_at", { ascending: false }),
         supabase.from("scans").select("*").order("created_at", { ascending: false }).limit(100),
         supabase.from("modules").select("*").order("risk_probability", { ascending: false }).limit(200),
         supabase.from("user_roles").select("role").eq("user_id", id).maybeSingle(),
-        supabase.from("metrics").select("scan_id,module_id,metric_key,raw_value,normalized_score,weight").order("measured_at", { ascending: false }).limit(5000)
+        supabase.from("metrics").select("scan_id,module_id,metric_key,raw_value,normalized_score,weight").order("measured_at", { ascending: false }).limit(5000),
+        supabase.from("metric_weights").select("metric_key,label,weight,direction,explanation").order("metric_key")
       ]);
       if (projectResult.error) throw projectResult.error;
       if (scanResult.error) throw scanResult.error;
       if (moduleResult.error) throw moduleResult.error;
       if (roleResult.error) throw roleResult.error;
       if (metricResult.error) throw metricResult.error;
+      if (weightResult.error) throw weightResult.error;
       setProjects((projectResult.data ?? []) as Project[]);
       setScans((scanResult.data ?? []) as Scan[]);
       setModules((moduleResult.data ?? []) as Module[]);
       setMetricRows((metricResult.data ?? []) as MetricRecord[]);
+      if (weightResult.data?.length) setWeightRows(weightResult.data.map((weight: any) => ({ key: weight.metric_key, label: weight.label, weight: Math.round(Number(weight.weight) * 100), direction: weight.direction === "higher_better" ? "Higher is better" : weight.direction === "lower_better" ? "Lower is better" : "Informational", note: weight.explanation })));
       if (roleResult.data?.role) setRole(roleResult.data.role as Role);
 
       if (roleResult.data?.role === "admin") {
@@ -650,7 +654,7 @@ export default function App() {
   const renderSettings = () => <div className="page-stack">
     <div className="card settings-intro"><div className="settings-icon"><SlidersHorizontal size={20} /></div><div><h2>Health score methodology</h2><p>SoftPulse normalises each metric to a 0–100 quality score, then calculates a weighted average. Weights are stored in the database and sum to 100%.</p></div></div>
     <div className="card"><div className="card-heading"><div><h2>Metric weights</h2><p>Each weight shows how much the metric contributes to the final score.</p></div><span className="weight-total">100% total</span></div>
-      <div className="weights-list">{metricWeights.map((metric) => <div className="weight-row" key={metric.key}><div className="weight-name"><strong>{metric.label}</strong><small>{metric.note}</small></div><div className="weight-meter"><i style={{ width: metric.weight * 6 + "%" }} /></div><strong className="weight-value">{metric.weight}%</strong><span className="direction-tag">{metric.direction}</span></div>)}</div>
+      <div className="weights-list">{weightRows.map((metric) => <div className="weight-row" key={metric.key}><div className="weight-name"><strong>{metric.label}</strong><small>{metric.note}</small></div><div className="weight-meter"><i style={{ width: metric.weight * 6 + "%" }} /></div><strong className="weight-value">{metric.weight}%</strong><span className="direction-tag">{metric.direction}</span></div>)}</div>
     </div>
     <div className="content-grid two-one">
       <div className="card"><div className="card-heading"><div><h2>Grade thresholds</h2><p>Every score is paired with a letter grade.</p></div></div><div className="grade-thresholds">{[{g:"A",r:"85–100",t:"Excellent"},{g:"B",r:"70–84",t:"Good"},{g:"C",r:"55–69",t:"Moderate"},{g:"D",r:"40–54",t:"Needs attention"},{g:"E",r:"0–39",t:"Critical"}].map((item) => <div className="grade-threshold-row" key={item.g}><GradeBadge grade={item.g} /><strong>{item.r}</strong><span>{item.t}</span></div>)}</div></div>
@@ -659,7 +663,7 @@ export default function App() {
   </div>;
 
   const renderPage = () => {
-    if (loading && page === "dashboard") return <Skeleton count={6} />;
+    if (loading) return <Skeleton count={6} />;
     switch (page) {
       case "dashboard": return renderDashboard();
       case "projects": return renderProjects();
