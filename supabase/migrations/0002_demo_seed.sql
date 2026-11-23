@@ -5,6 +5,7 @@ declare
   v_owner uuid;
   v_project uuid;
   v_scan_id uuid;
+  v_module_id uuid;
   v_scan record;
   v_i integer;
   v_module_paths text[] := array[
@@ -90,7 +91,19 @@ begin
           case when v_i <= 2 then 4 + v_i
                when v_i <= 4 then 10 + v_i
                else 26 end
-        );
+        ) returning id into v_module_id;
+
+        -- Representative per-module measurements for the detail drawer.
+        insert into public.metrics(scan_id,module_id,metric_key,raw_value,normalized_score,weight,contribution)
+        values
+          (v_scan_id,v_module_id,'lines_of_code',350 + (v_i * 260),round(100 - ((350 + (v_i * 260))::numeric / 5000 * 100),2),0.04,round((100 - ((350 + (v_i * 260))::numeric / 5000 * 100)) * 0.04,4)),
+          (v_scan_id,v_module_id,'cyclomatic_complexity',2 + (v_i * 2),round(100 - ((2 + (v_i * 2))::numeric / 20 * 100),2),0.12,round((100 - ((2 + (v_i * 2))::numeric / 20 * 100)) * 0.12,4)),
+          (v_scan_id,v_module_id,'maintainability_index',92 - (v_i * 7),92 - (v_i * 7),0.14,round((92 - (v_i * 7)) * 0.14,4)),
+          (v_scan_id,v_module_id,'code_smells',v_i,round(100 - (v_i::numeric / 35 * 100),2),0.10,round((100 - (v_i::numeric / 35 * 100)) * 0.10,4)),
+          (v_scan_id,v_module_id,'comment_ratio',5 + (v_i * 2),round((5 + (v_i * 2))::numeric / 20 * 100,2),0.04,round(((5 + (v_i * 2))::numeric / 20 * 100) * 0.04,4)),
+          (v_scan_id,v_module_id,'function_length',10 + (v_i * 8),round(100 - ((10 + (v_i * 8))::numeric / 100 * 100),2),0.08,round((100 - ((10 + (v_i * 8))::numeric / 100 * 100)) * 0.08,4)),
+          (v_scan_id,v_module_id,'nesting_depth',v_i,round(100 - (v_i::numeric / 10 * 100),2),0.08,round((100 - (v_i::numeric / 10 * 100)) * 0.08,4)),
+          (v_scan_id,v_module_id,'test_coverage_pct',95 - (v_i * 8),95 - (v_i * 8),0.12,round((95 - (v_i * 8)) * 0.12,4));
       end loop;
 
       for v_i in 1..12 loop
