@@ -265,6 +265,10 @@ export default function App() {
         }
         const changedScan = payload.new as Scan;
         if (!changedScan?.id) return;
+        if (payload.eventType === "INSERT" && ["queued", "running"].includes(changedScan.status)) {
+          // Keep the newest active assessment selected in every open workspace tab.
+          setSelectedScanId(changedScan.id);
+        }
         setScans((current) => {
           const exists = current.some((scan) => scan.id === changedScan.id);
           return exists
