@@ -749,3 +749,7 @@ form { display:flex; flex-direction:column; gap:10px; }form label,.label-row lab
   .step-pulse,.realtime-indicator.connecting i,.status-running svg { animation:none!important; }
   .live-progress span { transition:none!important; }
 }
+
+
+.gauge-track { transition:background .24s ease-out; }
+.gauge-inner strong { transition:color .18s ease; font-variant-numeric:tabular-nums; }
