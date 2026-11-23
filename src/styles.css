@@ -670,3 +670,16 @@ form { display:flex; flex-direction:column; gap:10px; }form label,.label-row lab
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; }
 }
+
+.project-scan-action { min-height:29px; padding:0 8px; font-size:8px; }
+.project-scan-action:disabled { opacity:.5; cursor:not-allowed; }
+.project-card-footer { gap:9px; }
+.project-card-footer .text-link { font-size:8px; white-space:nowrap; }
+.spin-icon { animation:softpulse-spin 1s linear infinite; }
+@keyframes softpulse-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin-icon { animation:none; } }
+@media (max-width: 640px) {
+  .project-card-footer { gap:6px; }
+  .project-scan-action { font-size:8px; padding:0 7px; }
+  .project-card-footer .text-link { font-size:8px; }
+}
