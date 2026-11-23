@@ -148,6 +148,7 @@ export default function App() {
     { id: "u4", email: "sam.lee@softpulse.dev", role: "viewer", display_name: "Sam Lee" }
   ]);
   const [loading, setLoading] = useState(false);
+  const [scanningProjectId, setScanningProjectId] = useState<string | null>(null);
   const [dataError, setDataError] = useState("");
   const [toast, setToast] = useState("");
   const [globalQuery, setGlobalQuery] = useState("");
@@ -322,6 +323,51 @@ export default function App() {
       notify(cause instanceof Error ? cause.message : "Unable to add this repository.");
     }
   };
+  const startScan = async (project: Project) => {
+    if (!canScan) {
+      notify("Your workspace role is read-only. Ask an admin or engineer to start a scan.");
+      return;
+    }
+    setScanningProjectId(project.id);
+    try {
+      if (supabase && !demoMode) {
+        const { data, error } = await supabase.functions.invoke("run-scan", {
+          body: { repo_url: project.repo_url, project_id: project.id }
+        });
+        if (error) throw error;
+        if (data?.error) throw new Error(data.error);
+        if (!data?.scan?.id) throw new Error("The scan function did not return a scan result.");
+        await loadWorkspace(userId || undefined);
+        setSelectedScanId(data.scan.id);
+        changePage("scans");
+        notify("Repository scan completed. Your health report is ready.");
+      } else {
+        const nextId = "demo-scan-" + Date.now();
+        const nextScore = Math.min(96, Math.max(58, (project.health_score || 70) + 3));
+        const nextScan: Scan = {
+          id: nextId, project_id: project.id, status: "completed", progress: 100,
+          health_score: nextScore, grade: gradeFrom(nextScore), commit_sha: "demo" + String(Date.now()).slice(-4),
+          commit_message: "Manual SoftPulse demo assessment", commit_author: "Demo user", created_at: new Date().toISOString()
+        };
+        const nextModules = demoModules.slice(0, 5).map((module, index) => ({
+          ...module, id: nextId + "-m" + index, scan_id: nextId, project_id: project.id
+        }));
+        setScans((current) => [nextScan, ...current]);
+        setModules((current) => [...nextModules, ...current]);
+        setProjects((current) => current.map((item) => item.id === project.id
+          ? { ...item, health_score: nextScore, grade: gradeFrom(nextScore), last_scan: "Just now", trend: 3 }
+          : item));
+        setSelectedScanId(nextId);
+        changePage("scans");
+        notify("Demo scan completed. Sample report generated.");
+      }
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : "Unable to start repository scan.");
+    } finally {
+      setScanningProjectId(null);
+    }
+  };
+
   const updateUserRole = async (id: string, nextRole: Role) => {
     if (!isAdmin) return;
     try {
@@ -481,7 +527,7 @@ export default function App() {
           <div className="project-score-row"><strong>{score || "—"}</strong><span>/ 100 health score</span><span className={project.trend && project.trend > 0 ? "trend-up" : project.trend && project.trend < 0 ? "trend-down" : "trend-flat"}>{project.trend ? (project.trend > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />) : null}{project.trend ? Math.abs(project.trend) + " pts" : "New"}</span></div>
           <div className="mini-progress"><i style={{ width: Math.max(0, Math.min(100, score)) + "%" }} /></div>
           <div className="project-meta"><span><GitBranch size={13} /> {project.default_branch || "main"}</span><span><Clock3 size={13} /> {project.last_scan || "No scan yet"}</span></div>
-          <div className="project-card-footer"><button className="text-link" onClick={() => { const s = scans.find((scan) => scan.project_id === project.id); if (s) setSelectedScanId(s.id); changePage(s ? "scans" : "history"); }}>{scans.some((s) => s.project_id === project.id) ? "View latest scan" : "View project"} <ArrowRight size={14} /></button><button className="icon-button" aria-label={"Open " + project.name + " on GitHub"} onClick={() => window.open(project.repo_url, "_blank", "noopener,noreferrer")}><ExternalLink size={15} /></button></div>
+          <div className="project-card-footer"><button className="button-secondary project-scan-action" disabled={!canScan || scanningProjectId === project.id} onClick={() => void startScan(project)}><RefreshCw size={13} className={scanningProjectId === project.id ? "spin-icon" : ""} />{scanningProjectId === project.id ? "Scanning…" : "Scan now"}</button><button className="text-link" onClick={() => { const s = scans.find((scan) => scan.project_id === project.id); if (s) { setSelectedScanId(s.id); changePage("scans"); } else notify("No assessment yet. Start the first scan."); }}>Latest report <ArrowRight size={14} /></button><button className="icon-button" aria-label={"Open " + project.name + " on GitHub"} onClick={() => window.open(project.repo_url, "_blank", "noopener,noreferrer")}><ExternalLink size={15} /></button></div>
         </article>;
       })}
       {filteredProjects.length === 0 && <div className="card full-span"><EmptyState icon={<FolderGit2 size={22} />} title="No repositories found" copy="Try another search or add a public GitHub repository to get started." /><button className="button-primary centered-button" onClick={() => setShowAddProject(true)}><Plus size={16} /> Add repository</button></div>}
