@@ -31,7 +31,7 @@ export default function App() {
     event.preventDefault();
     setError("");
     setMessage("");
-    if (!email.trim() || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setError("Enter a valid email address.");
       return;
     }
