@@ -178,7 +178,6 @@ Deno.serve(async (request) => {
         const response = await fetch(supabaseUrl.replace(/\/+$/, "") + "/functions/v1/run-scan", {
           method: "POST",
           headers: {
-            Authorization: "Bearer " + serviceKey,
             apikey: serviceKey,
             "Content-Type": "application/json",
             "x-softpulse-internal-secret": internalSecret
