@@ -6,7 +6,7 @@ import {
   ExternalLink, FileCode2, Flame, FolderGit2, Github, GitBranch, History,
   LayoutDashboard, LockKeyhole, LogOut, Mail, Menu, Moon, MoreHorizontal, Plus,
   RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Sun, Users,
-  X, Download, Sparkles
+  X, Download, Sparkles, Copy
 } from "lucide-react";
 import {
   Area, AreaChart, CartesianGrid, Line, LineChart,
@@ -18,9 +18,9 @@ type Page = "dashboard" | "projects" | "scans" | "modules" | "risks" | "history"
 type Role = "admin" | "manager" | "engineer" | "viewer";
 type Risk = "low" | "medium" | "high";
 type Mode = "signin" | "signup" | "reset";
-type Project = { id: string; name: string; repo_url: string; repo_owner?: string; repo_name?: string; default_branch?: string; created_at?: string; grade?: string; health_score?: number; last_scan?: string; trend?: number };
+type Project = { id: string; name: string; repo_url: string; repo_owner?: string; repo_name?: string; default_branch?: string; scan_on_push?: boolean; created_at?: string; grade?: string; health_score?: number; last_scan?: string; trend?: number };
 type ScanLogEntry = { at?: string; stage?: string; progress?: number; message: string };
-type Scan = { id: string; project_id: string; status: string; progress?: number; current_stage?: string; current_file?: string | null; progress_log?: ScanLogEntry[]; health_score?: number; grade?: string; commit_sha?: string; commit_message?: string; commit_author?: string; error_message?: string | null; cancelled_at?: string | null; created_at?: string; started_at?: string; completed_at?: string };
+type Scan = { id: string; project_id: string; status: string; trigger_source?: "manual" | "push"; progress?: number; current_stage?: string; current_file?: string | null; progress_log?: ScanLogEntry[]; health_score?: number; grade?: string; commit_sha?: string; commit_message?: string; commit_author?: string; error_message?: string | null; cancelled_at?: string | null; created_at?: string; started_at?: string; completed_at?: string };
 type Module = { id: string; scan_id?: string; project_id?: string; path: string; language?: string; lines_of_code: number; risk: Risk; risk_probability: number; estimated_refactor_hours: number; technical_debt_ratio: number; complexity?: number; coverage?: number; smells?: number };
 type MetricRecord = { scan_id: string; module_id?: string | null; metric_key: string; raw_value: number | null; normalized_score: number; weight: number };
 
@@ -98,6 +98,7 @@ const gradeFrom = (score?: number) => !Number.isFinite(score) ? "—" : (score! 
 const gradeClass = (grade?: string) => "grade-" + (grade || "C").toLowerCase();
 const riskClass = (risk: Risk) => "risk-" + risk;
 const formatDate = (value?: string) => value ? new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
+const webhookEndpoint = ((import.meta.env.VITE_SUPABASE_URL as string | undefined) || "https://YOUR_PROJECT_REF.supabase.co").replace(/\/+$/, "") + "/functions/v1/github-webhook";
 const getProject = (projects: Project[], id?: string) => projects.find((p) => p.id === id);
 
 function GradeBadge({ grade }: { grade?: string }) {
@@ -157,6 +158,7 @@ export default function App() {
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "error" | "offline">("offline");
   const cancelledDemoScanIds = useRef<Set<string>>(new Set());
   const scanLogRef = useRef<HTMLDivElement | null>(null);
+  const workspaceRefreshTimer = useRef<number | null>(null);
   const [dataError, setDataError] = useState("");
   const [toast, setToast] = useState("");
   const [globalQuery, setGlobalQuery] = useState("");
@@ -187,9 +189,9 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const loadWorkspace = useCallback(async (id?: string) => {
+  const loadWorkspace = useCallback(async (id?: string, options: { silent?: boolean } = {}) => {
     if (!supabase || !id) return;
-    setLoading(true);
+    if (!options.silent) setLoading(true);
     setDataError("");
     try {
       const [projectResult, scanResult, moduleResult, roleResult, metricResult, weightResult] = await Promise.all([
@@ -229,7 +231,7 @@ export default function App() {
       }
     } catch (cause) {
       setDataError(cause instanceof Error ? cause.message : "Unable to load workspace data.");
-    } finally { setLoading(false); }
+    } finally { if (!options.silent) setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -255,19 +257,27 @@ export default function App() {
       return;
     }
 
+    const scheduleWorkspaceRefresh = () => {
+      if (workspaceRefreshTimer.current !== null) window.clearTimeout(workspaceRefreshTimer.current);
+      workspaceRefreshTimer.current = window.setTimeout(() => {
+        workspaceRefreshTimer.current = null;
+        void loadWorkspace(userId, { silent: true });
+      }, 350);
+    };
+
     setRealtimeStatus("connecting");
     const channel = supabase
-      .channel("softpulse-scans-" + userId)
+      .channel("softpulse-workspace-" + userId)
       .on("postgres_changes", { event: "*", schema: "public", table: "scans" }, (payload) => {
         if (payload.eventType === "DELETE") {
           const deleted = payload.old as { id?: string };
           if (deleted.id) setScans((current) => current.filter((scan) => scan.id !== deleted.id));
+          scheduleWorkspaceRefresh();
           return;
         }
         const changedScan = payload.new as Scan;
         if (!changedScan?.id) return;
         if (payload.eventType === "INSERT" && ["queued", "running"].includes(changedScan.status)) {
-          // Keep the newest active assessment selected in every open workspace tab.
           setSelectedScanId(changedScan.id);
         }
         setScans((current) => {
@@ -276,9 +286,21 @@ export default function App() {
             ? current.map((scan) => scan.id === changedScan.id ? { ...scan, ...changedScan } : scan)
             : [changedScan, ...current];
         });
-        if (changedScan.status === "completed") {
-          void loadWorkspace(userId);
+        if (changedScan.status === "completed") scheduleWorkspaceRefresh();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, (payload) => {
+        if (payload.eventType === "DELETE") {
+          const deleted = payload.old as { id?: string };
+          if (deleted.id) setProjects((current) => current.filter((project) => project.id !== deleted.id));
+        } else {
+          const changedProject = payload.new as Project;
+          if (changedProject?.id) {
+            setProjects((current) => current.some((project) => project.id === changedProject.id)
+              ? current.map((project) => project.id === changedProject.id ? { ...project, ...changedProject } : project)
+              : [changedProject, ...current]);
+          }
         }
+        scheduleWorkspaceRefresh();
       })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setRealtimeStatus("connected");
@@ -287,6 +309,10 @@ export default function App() {
       });
 
     return () => {
+      if (workspaceRefreshTimer.current !== null) {
+        window.clearTimeout(workspaceRefreshTimer.current);
+        workspaceRefreshTimer.current = null;
+      }
       setRealtimeStatus("offline");
       void supabase.removeChannel(channel);
     };
@@ -412,7 +438,26 @@ export default function App() {
       notify(cause instanceof Error ? cause.message : "Unable to add this repository.");
     }
   };
-  const startScan = async (project: Project) => {
+  const togglePushScans = async (project: Project) => {
+    if (!canScan) {
+      notify("Your workspace role is read-only. Ask an admin or engineer to change automation settings.");
+      return;
+    }
+    const previous = project.scan_on_push !== false;
+    const next = !previous;
+    setProjects((current) => current.map((item) => item.id === project.id ? { ...item, scan_on_push: next } : item));
+    if (supabase && !demoMode) {
+      const { error } = await supabase.from("projects").update({ scan_on_push: next }).eq("id", project.id);
+      if (error) {
+        setProjects((current) => current.map((item) => item.id === project.id ? { ...item, scan_on_push: previous } : item));
+        notify(error.message || "Unable to update push automation.");
+        return;
+      }
+    }
+    notify(next ? "Automatic scans on push enabled." : "Automatic scans on push disabled.");
+  };
+
+  const startScan = async (project: Project, source: "manual" | "push" = "manual") => {
     if (!canScan) {
       notify("Your workspace role is read-only. Ask an admin or engineer to start a scan.");
       return;
@@ -427,11 +472,12 @@ export default function App() {
           status: "queued",
           progress: 0,
           current_stage: "Clone",
+          trigger_source: source,
           progress_log: [{
             at: new Date().toISOString(),
             stage: "Clone",
             progress: 0,
-            message: "Scan queued. Waiting for the repository analyzer to start."
+            message: source === "push" ? "Simulated GitHub push received. Waiting for the repository analyzer." : "Scan queued. Waiting for the repository analyzer to start."
           }]
         }).select("*").single();
         if (queueError) throw queueError;
@@ -443,7 +489,7 @@ export default function App() {
         setMobileNavOpen(false);
 
         const { data, error } = await supabase.functions.invoke("run-scan", {
-          body: { repo_url: project.repo_url, project_id: project.id, scan_id: queuedScan.id }
+          body: { repo_url: project.repo_url, project_id: project.id, scan_id: queuedScan.id, trigger_source: source }
         });
         if (error) throw error;
         if (data?.cancelled) {
@@ -456,7 +502,7 @@ export default function App() {
         await loadWorkspace(userId);
         setSelectedScanId(data.scan.id);
         setPage("scans");
-        notify("Repository scan completed. Your health report is ready.");
+        notify(source === "push" ? "Push-triggered scan completed. Your health report is ready." : "Repository scan completed. Your health report is ready.");
       } else {
         const nextId = "demo-scan-" + Date.now();
         pendingScanId = nextId;
@@ -464,11 +510,11 @@ export default function App() {
         const startedAt = new Date().toISOString();
         const initialLog: ScanLogEntry = {
           at: startedAt, stage: "Clone", progress: 2,
-          message: "Demo scan started. Connecting to the sample repository."
+          message: source === "push" ? "Demo push event received. Connecting to the sample repository." : "Demo scan started. Connecting to the sample repository."
         };
         const runningScan: Scan = {
           id: nextId, project_id: project.id, status: "running", progress: 2,
-          current_stage: "Clone", current_file: null,
+          current_stage: "Clone", current_file: null, trigger_source: source,
           commit_sha: "demo" + String(Date.now()).slice(-4),
           commit_message: "Manual SoftPulse demo assessment",
           commit_author: "Demo user", created_at: startedAt,
@@ -478,7 +524,7 @@ export default function App() {
         setSelectedScanId(nextId);
         setPage("scans");
         setMobileNavOpen(false);
-        notify("Demo scan started. Progress will update in this preview.");
+        notify(source === "push" ? "Simulated push received. A demo assessment is starting." : "Demo scan started. Progress will update in this preview.");
 
         const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
         const demoSteps: { stage: string; progress: number; message: string; file?: string; score?: number }[] = [
@@ -708,7 +754,7 @@ export default function App() {
   };
 
   const renderDashboard = () => projects.length === 0 ? <div className="card"><EmptyState icon={<FolderGit2 size={22} />} title="Your workspace is ready" copy="Add a public GitHub repository to begin measuring code health and maintenance risk." /><button className="button-primary centered-button" onClick={() => setShowAddProject(true)}><Plus size={15} /> Add first repository</button></div> : <div className="page-stack">
-    <div className="welcome-row"><div><div className="eyebrow muted">WORKSPACE OVERVIEW</div><h1>Good morning<span className="welcome-period">.</span></h1><p>Here’s the latest health pulse across your repositories.</p></div><button className="button-secondary" onClick={() => changePage("projects")}><Plus size={16} /> Add repository</button></div>
+    <div className="welcome-row"><div><div className="eyebrow muted">WORKSPACE OVERVIEW</div><h1>Good morning<span className="welcome-period">.</span></h1><p>Here’s the latest health pulse across your repositories.</p></div><div className="dashboard-actions"><span className={"realtime-pill " + realtimeStatus}><i />{demoMode ? "Demo workspace" : realtimeStatus === "connected" ? "Live sync connected" : realtimeStatus === "connecting" ? "Connecting live sync" : realtimeStatus === "error" ? "Live sync reconnecting" : "Live sync offline"}</span><button className="button-secondary" onClick={() => changePage("projects")}><Plus size={16} /> Add repository</button></div></div>
     <div className="dashboard-hero card">
       <div className="hero-score">
         <div className="eyebrow muted">WORKSPACE HEALTH</div>
@@ -777,7 +823,8 @@ export default function App() {
           <div className="project-score-row"><strong>{score || "—"}</strong><span>/ 100 health score</span><span className={projectTrend > 0 ? "trend-up" : projectTrend < 0 ? "trend-down" : "trend-flat"}>{projectTrend ? (projectTrend > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />) : null}{projectTrend ? Math.abs(projectTrend) + " pts" : "New"}</span></div>
           <div className="mini-progress"><i style={{ width: Math.max(0, Math.min(100, score)) + "%" }} /></div>
           <div className="project-meta"><span><GitBranch size={13} /> {project.default_branch || "main"}</span><span><Clock3 size={13} /> {lastScanLabel}</span></div>
-          <div className="project-card-footer"><button className="button-secondary project-scan-action" disabled={!canScan || scanningProjectId === project.id} onClick={() => void startScan(project)}><RefreshCw size={13} className={scanningProjectId === project.id ? "spin-icon" : ""} />{scanningProjectId === project.id ? "Scanning…" : "Scan now"}</button><button className="text-link" onClick={() => { const s = scans.find((scan) => scan.project_id === project.id); if (s) { setSelectedScanId(s.id); changePage("scans"); } else notify("No assessment yet. Start the first scan."); }}>Latest report <ArrowRight size={14} /></button><button className="icon-button" aria-label={"Open " + project.name + " on GitHub"} onClick={() => window.open(project.repo_url, "_blank", "noopener,noreferrer")}><ExternalLink size={15} /></button></div>
+          <div className="project-automation"><span>Auto-scan on push</span><button type="button" className={"automation-toggle " + (project.scan_on_push !== false ? "enabled" : "")} aria-pressed={project.scan_on_push !== false} disabled={!canScan} onClick={() => void togglePushScans(project)}><i />{project.scan_on_push !== false ? "On" : "Off"}</button></div>
+          <div className="project-card-footer"><button className="button-secondary project-scan-action" disabled={!canScan || scanningProjectId === project.id} onClick={() => void startScan(project)}><RefreshCw size={13} className={scanningProjectId === project.id ? "spin-icon" : ""} />{scanningProjectId === project.id ? "Scanning…" : "Scan now"}</button><button className="button-secondary simulate-push-action" disabled={!canScan || project.scan_on_push === false || scanningProjectId === project.id} onClick={() => void startScan(project, "push")}><GitBranch size={13} />Simulate push</button><button className="text-link" onClick={() => { const s = scans.find((scan) => scan.project_id === project.id); if (s) { setSelectedScanId(s.id); changePage("scans"); } else notify("No assessment yet. Start the first scan."); }}>Latest report <ArrowRight size={14} /></button><button className="icon-button" aria-label={"Open " + project.name + " on GitHub"} onClick={() => window.open(project.repo_url, "_blank", "noopener,noreferrer")}><ExternalLink size={15} /></button></div>
         </article>;
       })}
       {filteredProjects.length === 0 && <div className="card full-span"><EmptyState icon={<FolderGit2 size={22} />} title="No repositories found" copy="Try another search or add a public GitHub repository to get started." /><button className="button-primary centered-button" onClick={() => setShowAddProject(true)}><Plus size={16} /> Add repository</button></div>}
@@ -804,7 +851,7 @@ export default function App() {
             {scan.status === "completed" && scan.health_score !== undefined && scan.health_score !== null ? <GradeBadge grade={scan.grade || gradeFrom(scan.health_score)} /> : <span className="grade-pending">{scanIsActive && scan.health_score !== undefined ? "PROVISIONAL" : "GRADE PENDING"}</span>}
           </div>
           <div className="scan-meta-grid"><div><span>Scan ID</span><strong>{scan.id}</strong></div><div><span>Commit</span><strong>{(scan.commit_sha || "Pending")?.slice(0, 8)}</strong></div><div><span>Author</span><strong>{scan.commit_author || "SoftPulse"}</strong></div><div><span>Started</span><strong>{formatDate(scan.started_at || scan.created_at)}</strong></div></div>
-          <div className="commit-message"><GitBranch size={15} /><span>{scan.commit_message || "Repository health assessment"}</span><span className={scan.status === "completed" ? "status-complete" : scanIsActive ? "status-running" : scan.status === "failed" ? "status-failed" : "status-cancelled"}>{scanIsActive ? <Activity size={13} /> : scan.status === "completed" ? <Check size={13} /> : <AlertCircle size={13} />}{statusLabel}</span></div>
+          <div className="commit-message"><GitBranch size={15} />{scan.trigger_source === "push" && <span className="source-chip">PUSH TRIGGER</span>}<span>{scan.commit_message || "Repository health assessment"}</span><span className={scan.status === "completed" ? "status-complete" : scanIsActive ? "status-running" : scan.status === "failed" ? "status-failed" : "status-cancelled"}>{scanIsActive ? <Activity size={13} /> : scan.status === "completed" ? <Check size={13} /> : <AlertCircle size={13} />}{statusLabel}</span></div>
         </div>
         <div className="scan-stage-card card">
           <div className="card-heading">
@@ -908,6 +955,7 @@ export default function App() {
   </div>;
 
   const renderSettings = () => <div className="page-stack">
+    <div className="card webhook-card"><div className="settings-icon"><Github size={20} /></div><div className="webhook-copy"><h2>GitHub push automation</h2><p>Connect a signed GitHub push webhook. SoftPulse verifies the HMAC signature, checks the repository and default branch, then queues an assessment when project auto-scan is enabled.</p><label>Webhook payload URL</label><div className="webhook-url-row"><code>{webhookEndpoint}</code><button className="button-secondary" onClick={() => { void navigator.clipboard.writeText(webhookEndpoint).then(() => notify("Webhook URL copied.")).catch(() => notify("Clipboard access is unavailable. Copy the URL shown here.")); }}><Copy size={14} /> Copy URL</button></div><ol><li>Deploy the <code>github-webhook</code> and updated <code>run-scan</code> Edge Functions.</li><li>Set <code>GITHUB_WEBHOOK_SECRET</code> in Supabase and enter the same secret in GitHub → Settings → Webhooks.</li><li>Choose <code>application/json</code> and enable <strong>Just the push event</strong>.</li><li>Keep <strong>Auto-scan on push</strong> enabled on the project card. Only the configured default branch is scanned.</li></ol><small>“Simulate push” exercises the in-app scan flow; only a real GitHub delivery exercises signature verification.</small></div></div>
     <div className="card settings-intro"><div className="settings-icon"><SlidersHorizontal size={20} /></div><div><h2>Health score methodology</h2><p>SoftPulse normalises each metric to a 0–100 quality score, then calculates a weighted average. Weights are stored in the database and sum to 100%.</p></div></div>
     <div className="card"><div className="card-heading"><div><h2>Metric weights</h2><p>Each weight shows how much the metric contributes to the final score.</p></div><span className="weight-total">100% total</span></div>
       <div className="weights-list">{weightRows.map((metric) => <div className="weight-row" key={metric.key}><div className="weight-name"><strong>{metric.label}</strong><small>{metric.note}</small></div><div className="weight-meter"><i style={{ width: metric.weight * 6 + "%" }} /></div><strong className="weight-value">{metric.weight}%</strong><span className="direction-tag">{metric.direction}</span></div>)}</div>
