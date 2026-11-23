@@ -178,7 +178,8 @@ export default function App() {
 
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
   useEffect(() => {
-    scanLogRef.current?.scrollTo({ top: scanLogRef.current.scrollHeight, behavior: "smooth" });
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    scanLogRef.current?.scrollTo({ top: scanLogRef.current.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
   }, [selectedScanId, scans.find((scan) => scan.id === selectedScanId)?.progress_log]);
   useEffect(() => {
     if (!toast) return;
