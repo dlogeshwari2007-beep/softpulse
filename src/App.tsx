@@ -700,7 +700,32 @@ export default function App() {
         setProjects((current) => current.map((item) => item.id === project.id
           ? { ...item, health_score: nextScore, grade: gradeFrom(nextScore), last_scan: "Just now", trend: 3 }
           : item));
-        notify("Demo scan completed. Sample report generated.");
+        const completedAt = new Date().toISOString();
+        const demoEventId = "demo-event-" + Date.now();
+        const demoEvent: ActivityEvent = {
+          id: demoEventId,
+          event_type: "scan_completed",
+          title: source === "push" ? "Push-triggered scan completed" : "Scan completed",
+          message: project.name + " scored " + nextScore + "/100 (Grade " + gradeFrom(nextScore) + ").",
+          project_id: project.id,
+          scan_id: nextId,
+          created_at: completedAt
+        };
+        setActivityEvents((current) => [demoEvent, ...current].slice(0, 40));
+        if (notificationPreferences.scan_completed_enabled) {
+          const demoNotice: NotificationItem = {
+            id: "demo-notification-" + Date.now(),
+            user_id: "demo",
+            activity_event_id: demoEventId,
+            notification_type: "scan_completed",
+            title: demoEvent.title,
+            message: demoEvent.message,
+            read_at: null,
+            created_at: completedAt
+          };
+          setNotifications((current) => [demoNotice, ...current].slice(0, 40));
+        }
+        notify(source === "push" ? "Demo push scan completed. Sample report generated." : "Demo scan completed. Sample report generated.");
       }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Unable to start repository scan.";
