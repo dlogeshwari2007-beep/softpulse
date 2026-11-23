@@ -509,7 +509,7 @@ Deno.serve(async (request) => {
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "Scan failed.";
     if (scanId) {
-      const { data: currentScan } = await serviceClient.from("scans").select("status,progress_log").eq("id", scanId).maybeSingle();
+      const { data: currentScan } = await serviceClient.from("scans").select("status,progress,progress_log").eq("id", scanId).maybeSingle();
       if (currentScan?.status === "cancelled" || cause instanceof ScanCancelled) {
         const previousLog = Array.isArray(currentScan?.progress_log) ? currentScan.progress_log : [];
         const nextLog = [...previousLog, {
