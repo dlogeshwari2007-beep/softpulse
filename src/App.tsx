@@ -88,17 +88,6 @@ const demoModules: Module[] = moduleNames.map((m, i) => ({
   estimated_refactor_hours: m[5], technical_debt_ratio: m[6], complexity: 6 + i * 2, coverage: Math.max(42, 94 - i * 4), smells: i + 1
 }));
 
-const trendData = [
-  { scan: "Nov 16", commons: 79, payments: 69, portal: 65 },
-  { scan: "Nov 17", commons: 82, payments: 71, portal: 66 },
-  { scan: "Nov 18", commons: 84, payments: 72, portal: 67 },
-  { scan: "Nov 19", commons: 85, payments: 74, portal: 67 },
-  { scan: "Nov 20", commons: 84, payments: 76, portal: 66 },
-  { scan: "Nov 21", commons: 86, payments: 76, portal: 65 },
-  { scan: "Nov 22", commons: 87, payments: 77, portal: 64 },
-  { scan: "Nov 23", commons: 91, payments: 78, portal: 64 }
-];
-
 const sparkData = [
   [72, 74, 73, 79, 82, 87, 91], [68, 70, 72, 73, 74, 76, 78], [74, 72, 68, 70, 66, 65, 64],
   [54, 58, 57, 62, 65, 68, 72], [82, 80, 83, 85, 86, 88, 91], [43, 45, 46, 51, 54, 57, 61]
@@ -252,6 +241,20 @@ export default function App() {
   const isAdmin = demoMode || role === "admin";
   const canScan = demoMode || ["admin", "manager", "engineer"].includes(role);
   const selectedScan = scans.find((scan) => scan.id === selectedScanId) || scans[0];
+  const workspaceScores = projects.map((project) =>
+    project.health_score ?? scans.find((scan) => scan.project_id === project.id)?.health_score
+  ).filter((score): score is number => typeof score === "number" && score > 0);
+  const workspaceScore = workspaceScores.length
+    ? Math.round(workspaceScores.reduce((sum, score) => sum + score, 0) / workspaceScores.length)
+    : (scans[0]?.health_score ?? 87);
+  const trendChartData = [...scans]
+    .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime())
+    .slice(-8)
+    .map((scan) => ({
+      scan: formatDate(scan.created_at),
+      score: scan.health_score ?? 0,
+      repository: getProject(projects, scan.project_id)?.name ?? "Repository"
+    }));
   const validRepoUrl = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(repoInput.trim());
   const filteredProjects = useMemo(() => projects.filter((project) => {
     const grade = project.grade || gradeFrom(project.health_score);
@@ -482,18 +485,18 @@ export default function App() {
     <div className="dashboard-hero card">
       <div className="hero-score">
         <div className="eyebrow muted">WORKSPACE HEALTH</div>
-        <ScoreGauge score={91} />
-        <div className="score-context"><span className="positive-trend"><ArrowUpRight size={15} /> +4 points</span><span>since your previous assessment</span></div>
+        <ScoreGauge score={workspaceScore} />
+        <div className="score-context"><span className="neutral-trend">Portfolio average</span><span>across repositories with a completed scan</span></div>
       </div>
       <div className="hero-divider" />
-      <div className="hero-summary"><div className="eyebrow muted">AT A GLANCE</div><h2>Your codebase is trending healthier.</h2><p>Maintainability improved this week, with fewer duplicate blocks and healthier test coverage across the active repositories.</p>
+      <div className="hero-summary"><div className="eyebrow muted">AT A GLANCE</div><h2>{workspaceScore >= 85 ? "Your repositories are in healthy shape." : workspaceScore >= 70 ? "Your workspace has a solid foundation." : "There are opportunities to improve maintainability."}</h2><p>The portfolio score is the average of each repository’s latest completed assessment. Open a project to review the factors behind its score.</p>
         <div className="hero-stats">
           <div><strong>{projects.length.toString().padStart(2, "0")}</strong><span>Repositories</span></div>
           <div><strong>{scans.length.toString().padStart(2, "0")}</strong><span>Completed scans</span></div>
           <div><strong>{modules.filter((m) => m.risk === "high").length.toString().padStart(2, "0")}</strong><span>High-risk modules</span></div>
         </div>
       </div>
-      <div className="hero-grade"><GradeBadge grade="A" /><span>Overall grade</span><small>Target: 85+</small></div>
+      <div className="hero-grade"><GradeBadge grade={gradeFrom(workspaceScore)} /><span>Overall grade</span><small>Target: 85+</small></div>
     </div>
     <div className="section-heading"><div><h2>Quality indicators</h2><p>Six core signals, each updated from the latest available assessment.</p></div><button className="quiet-button" onClick={() => changePage("settings")}>Scoring methodology <ArrowRight size={14} /></button></div>
     <div className="metric-grid">
@@ -513,8 +516,8 @@ export default function App() {
     <div className="content-grid two-one">
       <section className="card chart-card">
         <div className="card-heading"><div><h2>Health score trend</h2><p>Last eight assessments · score out of 100</p></div><button className="quiet-button" onClick={() => changePage("history")}>View history <ArrowRight size={14} /></button></div>
-        <div className="chart-legend"><span><i className="legend-dot teal" /> commons-utils</span><span><i className="legend-dot navy" /> payments-api</span><span><i className="legend-dot amber" /> customer-portal</span></div>
-        <div className="main-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={trendData} margin={{ top: 8, right: 8, left: -22, bottom: 0 }}><CartesianGrid stroke="rgb(var(--border))" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="scan" tickLine={false} axisLine={false} tick={{ fill: "rgb(var(--muted))", fontSize: 11 }} /><YAxis domain={[50, 100]} tickLine={false} axisLine={false} tick={{ fill: "rgb(var(--muted))", fontSize: 11 }} /><Tooltip contentStyle={{ background: "rgb(var(--surface))", border: "1px solid rgb(var(--border))", borderRadius: 10, color: "rgb(var(--text))" }} /><Line type="monotone" dataKey="commons" name="commons-utils" stroke="rgb(var(--accent))" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="payments" name="payments-api" stroke="rgb(var(--brand))" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="portal" name="customer-portal" stroke="#D99B36" strokeWidth={2.5} dot={false} /></LineChart></ResponsiveContainer></div>
+        <div className="chart-legend"><span><i className="legend-dot teal" /> Assessment health score</span></div>
+        <div className="main-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={trendChartData} margin={{ top: 8, right: 8, left: -22, bottom: 0 }}><CartesianGrid stroke="rgb(var(--border))" strokeDasharray="3 5" vertical={false} /><XAxis dataKey="scan" tickLine={false} axisLine={false} tick={{ fill: "rgb(var(--muted))", fontSize: 11 }} /><YAxis domain={[0, 100]} tickLine={false} axisLine={false} tick={{ fill: "rgb(var(--muted))", fontSize: 11 }} /><Tooltip formatter={(value, _name, item) => [value + " / 100", item.payload.repository]} contentStyle={{ background: "rgb(var(--surface))", border: "1px solid rgb(var(--border))", borderRadius: 10, color: "rgb(var(--text))" }} /><Line type="monotone" dataKey="score" name="Health score" stroke="rgb(var(--accent))" strokeWidth={2.5} dot={{ r: 3, fill: "rgb(var(--accent))" }} activeDot={{ r: 5 }} /></LineChart></ResponsiveContainer></div>
       </section>
       <section className="card risk-preview-card">
         <div className="card-heading"><div><h2>Highest risk modules</h2><p>Start with these refactoring candidates.</p></div><button className="icon-button" aria-label="Open risk ranking" onClick={() => changePage("risks")}><ArrowRight size={17} /></button></div>
@@ -534,7 +537,9 @@ export default function App() {
     <div className="page-toolbar"><div className="search-field"><Search size={16} /><input placeholder="Search repositories..." value={projectQuery} onChange={(e) => setProjectQuery(e.target.value)} /></div><div className="toolbar-actions"><select className="select-control" value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} aria-label="Filter projects by grade"><option value="all">All grades</option>{["A","B","C","D","E"].map((g) => <option key={g} value={g}>Grade {g}</option>)}</select><button className="button-primary" onClick={() => { setShowAddProject(true); setRepoTouched(false); }}><Plus size={16} /> Add repository</button></div></div>
     <div className="project-grid">
       {filteredProjects.map((project) => {
-        const score = project.health_score ?? scans.find((s) => s.project_id === project.id)?.health_score ?? 0;
+        const projectLatestScan = scans.find((s) => s.project_id === project.id);
+        const score = project.health_score ?? projectLatestScan?.health_score ?? 0;
+        const lastScanLabel = project.last_scan || (projectLatestScan?.created_at ? formatDate(projectLatestScan.created_at) : "No scan yet");
         const grade = project.grade || gradeFrom(score);
         return <article className="project-card card" key={project.id}>
           <div className="project-card-top"><div className="repo-avatar"><Github size={20} /></div><button className="icon-button" aria-label={"Open actions for " + project.name} onClick={() => notify("Project actions are available in the next workflow update.")}><MoreHorizontal size={18} /></button></div>
@@ -542,7 +547,7 @@ export default function App() {
           <a className="repo-url" href={project.repo_url} target="_blank" rel="noreferrer">{project.repo_owner || "github"}/{project.repo_name || project.name} <ExternalLink size={12} /></a>
           <div className="project-score-row"><strong>{score || "—"}</strong><span>/ 100 health score</span><span className={project.trend && project.trend > 0 ? "trend-up" : project.trend && project.trend < 0 ? "trend-down" : "trend-flat"}>{project.trend ? (project.trend > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />) : null}{project.trend ? Math.abs(project.trend) + " pts" : "New"}</span></div>
           <div className="mini-progress"><i style={{ width: Math.max(0, Math.min(100, score)) + "%" }} /></div>
-          <div className="project-meta"><span><GitBranch size={13} /> {project.default_branch || "main"}</span><span><Clock3 size={13} /> {project.last_scan || "No scan yet"}</span></div>
+          <div className="project-meta"><span><GitBranch size={13} /> {project.default_branch || "main"}</span><span><Clock3 size={13} /> {lastScanLabel}</span></div>
           <div className="project-card-footer"><button className="button-secondary project-scan-action" disabled={!canScan || scanningProjectId === project.id} onClick={() => void startScan(project)}><RefreshCw size={13} className={scanningProjectId === project.id ? "spin-icon" : ""} />{scanningProjectId === project.id ? "Scanning…" : "Scan now"}</button><button className="text-link" onClick={() => { const s = scans.find((scan) => scan.project_id === project.id); if (s) { setSelectedScanId(s.id); changePage("scans"); } else notify("No assessment yet. Start the first scan."); }}>Latest report <ArrowRight size={14} /></button><button className="icon-button" aria-label={"Open " + project.name + " on GitHub"} onClick={() => window.open(project.repo_url, "_blank", "noopener,noreferrer")}><ExternalLink size={15} /></button></div>
         </article>;
       })}
