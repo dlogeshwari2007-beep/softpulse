@@ -21,6 +21,7 @@ type Mode = "signin" | "signup" | "reset";
 type Project = { id: string; name: string; repo_url: string; repo_owner?: string; repo_name?: string; default_branch?: string; created_at?: string; grade?: string; health_score?: number; last_scan?: string; trend?: number };
 type Scan = { id: string; project_id: string; status: string; progress?: number; health_score?: number; grade?: string; commit_sha?: string; commit_message?: string; commit_author?: string; created_at?: string; started_at?: string; completed_at?: string };
 type Module = { id: string; scan_id?: string; project_id?: string; path: string; language?: string; lines_of_code: number; risk: Risk; risk_probability: number; estimated_refactor_hours: number; technical_debt_ratio: number; complexity?: number; coverage?: number; smells?: number };
+type MetricRecord = { scan_id: string; metric_key: string; raw_value: number | null; normalized_score: number; weight: number };
 
 const metricWeights = [
   { key: "lines_of_code", label: "Lines of code", weight: 4, direction: "Lower is better", note: "Large modules are harder to understand and change." },
@@ -68,6 +69,18 @@ const moduleNames = [
   ["src/utils/strings.ts", "TypeScript", 410, "low", 12, 1, 2],
   ["src/state/store.ts", "TypeScript", 1450, "medium", 51, 9, 16]
 ] as const;
+
+const demoMetrics: MetricRecord[] = [
+  ["maintainability_index",86,86,0.14],["cyclomatic_complexity",7.4,81,0.12],
+  ["duplication_pct",3.8,88,0.10],["test_coverage_pct",78,78,0.12],
+  ["code_smells",24,78,0.10],["vulnerable_dependencies",2,55,0.06],
+  ["lines_of_code",12400,74,0.04],["comment_ratio",8.2,72,0.04],
+  ["function_length",32,80,0.08],["nesting_depth",3,75,0.08],
+  ["test_to_code_ratio",0.22,69,0.06],["outdated_dependencies",5,65,0.06]
+].map(([metric_key, raw_value, normalized_score, weight]) => ({
+  scan_id: "s1", metric_key: String(metric_key), raw_value: Number(raw_value),
+  normalized_score: Number(normalized_score), weight: Number(weight)
+})));
 
 const demoModules: Module[] = moduleNames.map((m, i) => ({
   id: "m" + (i + 1), scan_id: "s1", project_id: i < 6 ? "p1" : i < 10 ? "p2" : "p3",
@@ -141,6 +154,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>(demoProjects);
   const [scans, setScans] = useState<Scan[]>(demoScans);
   const [modules, setModules] = useState<Module[]>(demoModules);
+  const [metricRows, setMetricRows] = useState<MetricRecord[]>(demoMetrics);
   const [users, setUsers] = useState<{ id: string; email: string; role: Role; display_name?: string }[]>([
     { id: "u1", email: "maya.chen@softpulse.dev", role: "admin", display_name: "Maya Chen" },
     { id: "u2", email: "arjun.rao@softpulse.dev", role: "engineer", display_name: "Arjun Rao" },
@@ -180,19 +194,22 @@ export default function App() {
     setLoading(true);
     setDataError("");
     try {
-      const [projectResult, scanResult, moduleResult, roleResult] = await Promise.all([
+      const [projectResult, scanResult, moduleResult, roleResult, metricResult] = await Promise.all([
         supabase.from("projects").select("*").order("created_at", { ascending: false }),
         supabase.from("scans").select("*").order("created_at", { ascending: false }).limit(100),
         supabase.from("modules").select("*").order("risk_probability", { ascending: false }).limit(200),
-        supabase.from("user_roles").select("role").eq("user_id", id).maybeSingle()
+        supabase.from("user_roles").select("role").eq("user_id", id).maybeSingle(),
+        supabase.from("metrics").select("scan_id,metric_key,raw_value,normalized_score,weight").order("measured_at", { ascending: false }).limit(500)
       ]);
       if (projectResult.error) throw projectResult.error;
       if (scanResult.error) throw scanResult.error;
       if (moduleResult.error) throw moduleResult.error;
       if (roleResult.error) throw roleResult.error;
+      if (metricResult.error) throw metricResult.error;
       if (projectResult.data?.length) setProjects(projectResult.data as Project[]);
       if (scanResult.data?.length) setScans(scanResult.data as Scan[]);
       if (moduleResult.data?.length) setModules(moduleResult.data as Module[]);
+      if (metricResult.data?.length) setMetricRows(metricResult.data as MetricRecord[]);
       if (roleResult.data?.role) setRole(roleResult.data.role as Role);
 
       if (roleResult.data?.role === "admin") {
@@ -481,17 +498,18 @@ export default function App() {
     <div className="section-heading"><div><h2>Quality indicators</h2><p>Six core signals, each updated from the latest available assessment.</p></div><button className="quiet-button" onClick={() => changePage("settings")}>Scoring methodology <ArrowRight size={14} /></button></div>
     <div className="metric-grid">
       {[
-        ["Maintainability index", "86", "+5.2%", "positive", "MI"],
-        ["Cyclomatic complexity", "7.4", "−0.8", "positive", "CC"],
-        ["Code duplication", "3.8%", "−1.1%", "positive", "DU"],
-        ["Test coverage", "78%", "+6.4%", "positive", "TC"],
-        ["Code smells", "24", "−8", "positive", "CS"],
-        ["Vulnerable dependencies", "02", "No change", "neutral", "VD"]
+        ["maintainability_index", "Maintainability index", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "maintainability_index")?.raw_value ?? 86, "+5.2%", "positive", "MI"],
+        ["cyclomatic_complexity", "Cyclomatic complexity", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "cyclomatic_complexity")?.raw_value ?? 7.4, "−0.8", "positive", "CC"],
+        ["duplication_pct", "Code duplication", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "duplication_pct")?.raw_value ?? 3.8, "−1.1%", "positive", "DU"],
+        ["test_coverage_pct", "Test coverage", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "test_coverage_pct")?.raw_value ?? 78, "+6.4%", "positive", "TC"],
+        ["code_smells", "Code smells", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "code_smells")?.raw_value ?? 24, "−8", "positive", "CS"],
+        ["vulnerable_dependencies", "Vulnerable dependencies", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "vulnerable_dependencies")?.raw_value ?? 2, "No change", "neutral", "VD"]
       ].map((item, i) => <div className="metric-card card" key={item[0]}>
-        <div className="metric-card-top"><span className="metric-symbol">{item[4]}</span><span className="metric-label">{item[0]}</span></div>
-        <div className="metric-value-row"><strong>{item[1]}</strong><span className={item[3] === "positive" ? "delta positive-trend" : "delta neutral-trend"}>{item[2]}</span></div>
+        <div className="metric-card-top"><span className="metric-symbol">{item[5]}</span><span className="metric-label">{item[1]}</span></div>
+        <div className="metric-value-row"><strong>{item[2]}{item[0] === "duplication_pct" || item[0] === "test_coverage_pct" ? "%" : ""}</strong><span className={item[4] === "positive" ? "delta positive-trend" : "delta neutral-trend"}>{item[3]}</span></div>
         <Sparkline values={sparkData[i]} />
       </div>)}
+    </div>)}
     </div>
     <div className="content-grid two-one">
       <section className="card chart-card">
