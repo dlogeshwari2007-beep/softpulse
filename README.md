@@ -20,10 +20,11 @@ Open the local URL printed by Vite. Without Supabase environment variables, Soft
 3. Run `supabase/migrations/0003_first_admin_race_safety.sql` so simultaneous first signups cannot both be promoted to admin.
 4. Run `supabase/migrations/0004_scan_realtime.sql` to add scan progress and cancellation fields and publish scans to `supabase_realtime`.
 5. Run `supabase/migrations/0005_push_automation.sql` to add per-project push settings, webhook delivery idempotency and project Realtime.
-6. Enable Email authentication and add local/Vercel URLs to the allowed redirect URLs.
-7. Add your project URL and anon/public key to `.env.local`. Never expose the service-role key in the browser.
-8. Register the first account through SoftPulse. The database trigger assigns admin only while the role table is empty; later accounts receive viewer.
-9. Run `supabase/migrations/0002_demo_seed.sql` to seed 3 projects, 8 scans, 40 modules and sample metrics for the first registered user.
+6. Run `supabase/migrations/0006_notifications_activity.sql` to add the workspace activity feed, per-user notifications and alert preferences.
+7. Enable Email authentication and add local/Vercel URLs to the allowed redirect URLs.
+8. Add your project URL and anon/public key to `.env.local`. Never expose the service-role key in the browser.
+9. Register the first account through SoftPulse. The database trigger assigns admin only while the role table is empty; later accounts receive viewer.
+10. Run `supabase/migrations/0002_demo_seed.sql` to seed 3 projects, 8 scans, 40 modules and sample metrics for the first registered user.
 
 ## Phase 2 screens
 
@@ -37,7 +38,10 @@ Open the local URL printed by Vite. Without Supabase environment variables, Soft
 - Step 2 live workspace: authenticated tabs subscribe to scan and project changes. A completed scan triggers a quiet workspace refresh so dashboard scores, modules and metric indicators update without a page reload.
 - Step 2 push automation: each project has an Auto-scan on push setting. The public `github-webhook` Edge Function verifies `X-Hub-Signature-256`, filters to pushes on the configured default branch, uses the GitHub delivery ID to prevent duplicate scans, and invokes `run-scan` against the exact pushed commit SHA.
 - Project cards include a “Simulate push” action to exercise the in-app queued scan flow. This UI simulation does not test GitHub signature verification.
-- Demo workspace simulates stage and metric updates locally. Real cross-tab streaming and signed push automation require the Supabase migrations, Realtime and Edge Functions to be deployed.
+- Step 3 notifications and activity: scan queue/start/completion/failure/cancellation and repository additions are recorded in a workspace activity feed. Per-user in-app notifications are generated for completed/failed scans and configurable health-score drops; users can mark individual or all notifications read.
+- Alert preferences: each user can independently enable completion, failure and health-drop notifications and set the minimum score-drop threshold. Preferences are stored in Supabase and enforced by database triggers.
+- Demo mode includes sample activity and notifications; simulated scans add new local feed items and notifications.
+- Demo workspace simulates stage and metric updates locally. Real cross-tab streaming, signed push automation, and persisted notifications require the Supabase migrations, Realtime and Edge Functions to be deployed.
 - Module inventory with filtering, sorting, risk pills, code-risk map and module detail drawer.
 - Risk ranking with probability bars, estimated refactoring effort, technical debt summary and top action.
 - Scan history timeline and side-by-side scan comparison.
@@ -76,17 +80,19 @@ For each GitHub repository, open **Settings → Webhooks → Add webhook**. Set 
 
 The hosted function uses the Supabase URL, anon key and service-role key injected by Supabase. An optional `GITHUB_TOKEN` function secret raises the GitHub API rate limit for repository reads. Never put the service-role key or GitHub token in Vite environment variables. Configure CORS with the `APP_ORIGIN` function secret to restrict browser requests to your deployed app origin.
 
-## Step 1 and Step 2 realtime / push setup
+## Step 1–3 realtime, push and notifications
 
-Apply `0004_scan_realtime.sql` and `0005_push_automation.sql` before starting a scan. Supabase Realtime must be enabled for the project, and the signed-in user needs read access to the scans table (the base migration provides authenticated scan reads through RLS). The Edge Function writes bounded progress-log events to each scan row. Cancellation changes the row status to `cancelled`; the worker stops at its next checkpoint. The browser-side cancel control is available only to admin, manager and engineer roles. This implementation is cooperative cancellation: an in-flight external HTTP request is not forcibly interrupted, but no further scan stages run after the next status check.
+Apply `0004_scan_realtime.sql`, `0005_push_automation.sql` and `0006_notifications_activity.sql` before starting a scan. Supabase Realtime must be enabled for the project, and the signed-in user needs read access to scans, projects, activity events and their own notifications (provided by the RLS policies). The Edge Function writes bounded progress-log events to each scan row. Cancellation changes the row status to `cancelled`; the worker stops at its next checkpoint. The browser-side cancel control is available only to admin, manager and engineer roles. This implementation is cooperative cancellation: an in-flight external HTTP request is not forcibly interrupted, but no further scan stages run after the next status check.
 
+
+Step 3 adds two read surfaces: an authenticated workspace-wide activity feed and a user-scoped notification inbox. The database records repository additions and scan lifecycle transitions. Notifications are created for successful and failed scans, and for a health-score drop that meets the user’s configured threshold. Users can only read their own notification rows and update the `read_at` field; activity creation and notification generation are database-trigger controlled. Alert preferences are readable/updatable only by the signed-in user. These are in-app notifications; email delivery and external messaging are not included.
 ## Measurement notes
 
 The scanner intentionally limits source inspection to 140 supported source files per repository. Cyclomatic complexity, function length, nesting, duplication and maintainability are heuristic estimates based on source text. Test coverage is reported from an LCOV file when available; without one, its normalised score uses a neutral placeholder and the raw value remains unavailable. Dependency checks currently inspect npm package metadata and OSV advisories for at most 30 dependencies. Treat these results as engineering triage signals and validate important findings with your project's normal test, lint, SAST and dependency-audit tooling.
 
 ## Next implementation steps
 
-The approved base application and Steps 1–2 (live scan streaming, cooperative cancellation, live dashboard refresh and signed push-triggered scans) are implemented in the repository. Notifications, forecasting, what-if simulator, AI refactoring assistant, benchmarking, report sharing, power-user tools and reliability layer remain for the subsequent steps. Sample charts and measurements in demo mode are illustrative data, not analysis of a live repository.
+The approved base application and Steps 1–3 (live scan streaming, cooperative cancellation, live dashboard refresh, signed push-triggered scans, notifications, activity feed and per-user alert preferences) are implemented in the repository. Forecasting, what-if simulator, AI refactoring assistant, benchmarking, report sharing, power-user tools and reliability layer remain for the subsequent steps. Sample charts and measurements in demo mode are illustrative data, not analysis of a live repository.
 
 ## Deployment
 
