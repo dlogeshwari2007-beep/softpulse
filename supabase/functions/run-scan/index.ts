@@ -17,6 +17,13 @@ const clamp = (value: number, min = 0, max = 100) => Math.max(min, Math.min(max,
 const lowerIsBetter = (value: number, ceiling: number) => clamp(100 - (value / ceiling) * 100);
 const gradeFor = (score: number) => score >= 85 ? "A" : score >= 70 ? "B" : score >= 55 ? "C" : score >= 40 ? "D" : "E";
 
+class ScanCancelled extends Error {
+  constructor() {
+    super("Scan cancelled by user.");
+    this.name = "ScanCancelled";
+  }
+}
+
 function sourceLines(source: string) {
   return source.split(/\r?\n/).filter((line) => line.trim().length > 0);
 }
@@ -190,30 +197,106 @@ Deno.serve(async (request) => {
       }
     }
 
-    const { data: scan, error: scanError } = await serviceClient.from("scans").insert({
-      project_id: projectId,
-      started_by: userResult.user.id,
-      status: "running",
-      progress: 4,
-      current_stage: "Clone",
-      started_at: new Date().toISOString()
-    }).select("*").single();
-    if (scanError) throw scanError;
+    let scan: any;
+    const requestedScanId = typeof body.scan_id === "string" ? body.scan_id : null;
+    if (requestedScanId) {
+      const { data: queuedScan, error: queuedScanError } = await serviceClient
+        .from("scans")
+        .select("*")
+        .eq("id", requestedScanId)
+        .maybeSingle();
+      if (queuedScanError) throw queuedScanError;
+      if (!queuedScan || queuedScan.project_id !== projectId || queuedScan.started_by !== userResult.user.id) {
+        throw new Error("The requested scan does not belong to your account and repository.");
+      }
+      if (!["queued", "running"].includes(queuedScan.status)) {
+        throw new Error("This scan is no longer available to run.");
+      }
+      scan = queuedScan;
+      const { data: runningScan, error: runningError } = await serviceClient
+        .from("scans")
+        .update({
+          status: "running",
+          progress: Math.max(4, scan.progress ?? 0),
+          current_stage: "Clone",
+          started_at: scan.started_at ?? new Date().toISOString(),
+          progress_log: Array.isArray(scan.progress_log) ? scan.progress_log : []
+        })
+        .eq("id", requestedScanId)
+        .eq("status", "queued")
+        .select("*")
+        .maybeSingle();
+      if (runningError) throw runningError;
+      if (runningScan) scan = runningScan;
+    } else {
+      const { data: createdScan, error: scanError } = await serviceClient.from("scans").insert({
+        project_id: projectId,
+        started_by: userResult.user.id,
+        status: "running",
+        progress: 4,
+        current_stage: "Clone",
+        progress_log: [{
+          at: new Date().toISOString(),
+          stage: "Clone",
+          progress: 4,
+          message: "Scan started. Resolving the public GitHub repository."
+        }],
+        started_at: new Date().toISOString()
+      }).select("*").single();
+      if (scanError) throw scanError;
+      scan = createdScan;
+    }
     scanId = scan.id;
 
-    const updateStage = async (progress: number, stage: string, currentFile: string | null = null) => {
-      await serviceClient.from("scans").update({ progress, current_stage: stage, current_file: currentFile }).eq("id", scanId);
+    const ensureScanActive = async () => {
+      const { data: current, error } = await serviceClient
+        .from("scans")
+        .select("status,progress_log")
+        .eq("id", scanId)
+        .maybeSingle();
+      if (error) throw error;
+      if (current?.status === "cancelled") throw new ScanCancelled();
+      if (!current || current.status !== "running") throw new Error("Scan is no longer running.");
+      return current;
     };
 
+    const updateStage = async (
+      progress: number,
+      stage: string,
+      currentFile: string | null = null,
+      message = stage + " stage updated.",
+      healthScore?: number
+    ) => {
+      const current = await ensureScanActive();
+      const previousLog = Array.isArray(current.progress_log) ? current.progress_log : [];
+      const nextLog = [...previousLog, {
+        at: new Date().toISOString(),
+        stage,
+        progress,
+        message
+      }].slice(-120);
+      const updates: Record<string, unknown> = {
+        progress,
+        current_stage: stage,
+        current_file: currentFile,
+        progress_log: nextLog
+      };
+      if (typeof healthScore === "number") updates.health_score = Number(healthScore.toFixed(2));
+      const { error } = await serviceClient.from("scans").update(updates).eq("id", scanId);
+      if (error) throw error;
+    };
+
+    await updateStage(6, "Clone", null, "Repository metadata confirmed. Fetching the latest commit.");
     const commitResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/commits/" + branch, { headers: githubHeaders });
     const commit = commitResponse.ok ? await commitResponse.json() : null;
+    await ensureScanActive();
     await serviceClient.from("scans").update({
       commit_sha: commit?.sha ?? null,
       commit_message: commit?.commit?.message?.split("\n")[0] ?? null,
       commit_author: commit?.commit?.author?.name ?? null
     }).eq("id", scanId);
 
-    await updateStage(14, "Parse");
+    await updateStage(14, "Parse", null, "Repository commit identified. Reading the recursive file tree.");
     const treeResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/git/trees/" + branch + "?recursive=1", { headers: githubHeaders });
     if (!treeResponse.ok) throw new Error("Unable to read the repository tree from GitHub.");
     const tree = await treeResponse.json();
@@ -225,9 +308,10 @@ Deno.serve(async (request) => {
     const lockFile = (tree.tree ?? []).find((entry: any) => entry.type === "blob" && entry.path === "package-lock.json");
     const coverageFile = (tree.tree ?? []).find((entry: any) => entry.type === "blob" && entry.path.toLowerCase().endsWith("lcov.info"));
 
-    await updateStage(27, "Measure");
+    await updateStage(27, "Measure", null, "Source tree parsed. Measuring supported source files.");
     const inspected: ReturnType<typeof inspectSource>[] = [];
     for (let index = 0; index < sourceFiles.length; index += 8) {
+      await ensureScanActive();
       const batch = sourceFiles.slice(index, index + 8);
       const texts = await Promise.all(batch.map(async (entry: any) => {
         try {
@@ -239,7 +323,7 @@ Deno.serve(async (request) => {
         }
       }));
       inspected.push(...texts.filter(Boolean) as ReturnType<typeof inspectSource>[]);
-      await updateStage(Math.min(72, 27 + Math.round((index + batch.length) / sourceFiles.length * 45)), "Measure", batch[batch.length - 1]?.path ?? null);
+      await updateStage(Math.min(72, 27 + Math.round((index + batch.length) / sourceFiles.length * 45)), "Measure", batch[batch.length - 1]?.path ?? null, "Measured " + Math.min(index + batch.length, sourceFiles.length) + " of " + sourceFiles.length + " source files.");
     }
     if (!inspected.length) throw new Error("Source files were listed but their contents could not be read.");
 
@@ -299,11 +383,15 @@ Deno.serve(async (request) => {
     const weights = new Map<string, number>((storedWeights ?? []).map((item: any) => [item.metric_key, Number(item.weight)]));
     let totalWeight = 0;
     let weightedTotal = 0;
-    const metricRows = Object.entries(metricValues).map(([metricKey, value]) => {
+    const metricEntries = Object.entries(metricValues);
+    const metricRows: Record<string, unknown>[] = [];
+    for (let index = 0; index < metricEntries.length; index += 1) {
+      await ensureScanActive();
+      const [metricKey, value] = metricEntries[index];
       const weight = weights.get(metricKey) ?? METRIC_DEFAULTS[metricKey] ?? 0;
       totalWeight += weight;
       weightedTotal += value.normalized * weight;
-      return {
+      metricRows.push({
         scan_id: scanId,
         module_id: null,
         metric_key: metricKey,
@@ -311,12 +399,21 @@ Deno.serve(async (request) => {
         normalized_score: Number(value.normalized.toFixed(2)),
         weight,
         contribution: Number((value.normalized * weight).toFixed(4))
-      };
-    });
+      });
+      const partialScore = Number((weightedTotal / Math.max(totalWeight, 0.0001)).toFixed(2));
+      const metricProgress = 74 + Math.round(((index + 1) / metricEntries.length) * 12);
+      await updateStage(
+        metricProgress,
+        "Score",
+        null,
+        "Normalised metric " + (index + 1) + " of " + metricEntries.length + ": " + metricKey.replaceAll("_", " ") + ".",
+        partialScore
+      );
+    }
     const healthScore = Number((weightedTotal / Math.max(totalWeight, 0.0001)).toFixed(2));
     const grade = gradeFor(healthScore);
 
-    await updateStage(88, "Score");
+    await updateStage(88, "Score", null, "Weighted health score finalised at " + healthScore + " / 100.", healthScore);
     const moduleRows = codeFiles.map((file) => {
       const riskProbability = clamp(Math.round(file.complexity * 2.2 + file.smells * 4 + file.linesOfCode / 65 + file.nestingDepth * 3 - 15));
       const risk = riskProbability >= 65 ? "high" : riskProbability >= 38 ? "medium" : "low";
@@ -333,6 +430,7 @@ Deno.serve(async (request) => {
       };
     });
 
+    await updateStage(90, "Report", null, "Score calculated. Saving module risk results.");
     const { data: savedModules, error: moduleError } = await serviceClient
       .from("modules")
       .insert(moduleRows)
@@ -367,9 +465,11 @@ Deno.serve(async (request) => {
       });
     });
 
+    await ensureScanActive();
     const { error: metricError } = await serviceClient.from("metrics").insert([...metricRows, ...moduleMetricRows]);
     if (metricError) throw metricError;
-    await updateStage(96, "Report");
+    await updateStage(96, "Report", null, "Saved " + moduleRows.length + " modules and " + (metricRows.length + moduleMetricRows.length) + " metric measurements.");
+    await ensureScanActive();
 
     const { data: completed, error: completeError } = await serviceClient.from("scans").update({
       status: "completed",
@@ -388,9 +488,37 @@ Deno.serve(async (request) => {
     }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "Scan failed.";
-    if (scanId) await serviceClient.from("scans").update({
-      status: "failed", error_message: message, current_stage: "Report", completed_at: new Date().toISOString()
-    }).eq("id", scanId);
+    if (scanId) {
+      const { data: currentScan } = await serviceClient.from("scans").select("status,progress_log").eq("id", scanId).maybeSingle();
+      if (currentScan?.status === "cancelled" || cause instanceof ScanCancelled) {
+        const previousLog = Array.isArray(currentScan?.progress_log) ? currentScan.progress_log : [];
+        const nextLog = [...previousLog, {
+          at: new Date().toISOString(),
+          stage: "Cancelled",
+          progress: currentScan?.progress ?? 0,
+          message: "Scan cancelled by a workspace user."
+        }].slice(-120);
+        await serviceClient.from("scans").update({
+          status: "cancelled",
+          current_stage: "Cancelled",
+          current_file: null,
+          cancelled_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+          progress_log: nextLog
+        }).eq("id", scanId);
+        return new Response(JSON.stringify({ cancelled: true, scan_id: scanId }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      await serviceClient.from("scans").update({
+        status: "failed",
+        error_message: message,
+        current_stage: "Report",
+        current_file: null,
+        completed_at: new Date().toISOString()
+      }).eq("id", scanId).eq("status", "running");
+    }
     return new Response(JSON.stringify({ error: message, scan_id: scanId }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" }
