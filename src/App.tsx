@@ -269,17 +269,23 @@ export default function App() {
       repository: getProject(projects, scan.project_id)?.name ?? "Repository"
     }));
   const validRepoUrl = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(repoInput.trim());
+  const latestScanByProject = new Map<string, string>();
+  [...scans].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+    .forEach((scan) => { if (!latestScanByProject.has(scan.project_id)) latestScanByProject.set(scan.project_id, scan.id); });
+  const moduleInventory = demoMode ? modules : modules.filter((module) =>
+    module.scan_id && latestScanByProject.get(module.project_id || "") === module.scan_id
+  );
   const filteredProjects = useMemo(() => projects.filter((project) => {
     const grade = project.grade || gradeFrom(project.health_score);
     const matchesText = (project.name + " " + project.repo_url).toLowerCase().includes(projectQuery.toLowerCase());
     const matchesGrade = projectFilter === "all" || grade === projectFilter;
     return matchesText && matchesGrade;
   }), [projects, projectQuery, projectFilter]);
-  const filteredModules = useMemo(() => modules.filter((module) =>
+  const filteredModules = useMemo(() => moduleInventory.filter((module) =>
     (module.path + " " + (module.language || "")).toLowerCase().includes(moduleQuery.toLowerCase()) &&
     (moduleFilter === "all" || module.risk === moduleFilter)
-  ).sort((a, b) => moduleSort === "lines" ? b.lines_of_code - a.lines_of_code : moduleSort === "path" ? a.path.localeCompare(b.path) : b.risk_probability - a.risk_probability), [modules, moduleQuery, moduleFilter, moduleSort]);
-  const topRiskModules = [...modules].sort((a, b) => b.risk_probability - a.risk_probability).slice(0, 5);
+  ).sort((a, b) => moduleSort === "lines" ? b.lines_of_code - a.lines_of_code : moduleSort === "path" ? a.path.localeCompare(b.path) : b.risk_probability - a.risk_probability), [moduleInventory, moduleQuery, moduleFilter, moduleSort]);
+  const topRiskModules = [...moduleInventory].sort((a, b) => b.risk_probability - a.risk_probability).slice(0, 5);
   const scansForHistory = [...scans].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
   const searchMatches = globalQuery.trim() ? [
     ...projects.filter((p) => p.name.toLowerCase().includes(globalQuery.toLowerCase())).slice(0, 3).map((p) => ({ label: p.name, detail: "Project", action: () => { setPage("projects"); setProjectQuery(p.name); setShowSearch(false); } })),
@@ -506,7 +512,7 @@ export default function App() {
         <div className="hero-stats">
           <div><strong>{projects.length.toString().padStart(2, "0")}</strong><span>Repositories</span></div>
           <div><strong>{scans.length.toString().padStart(2, "0")}</strong><span>Completed scans</span></div>
-          <div><strong>{modules.filter((m) => m.risk === "high").length.toString().padStart(2, "0")}</strong><span>High-risk modules</span></div>
+          <div><strong>{moduleInventory.filter((m) => m.risk === "high").length.toString().padStart(2, "0")}</strong><span>High-risk modules</span></div>
         </div>
       </div>
       <div className="hero-grade"><GradeBadge grade={gradeFrom(workspaceScore)} /><span>Overall grade</span><small>Target: 85+</small></div>
@@ -598,7 +604,7 @@ export default function App() {
   };
 
   const renderModules = () => <div className="page-stack">
-    <div className="module-summary-strip"><div><strong>{modules.length}</strong><span>Modules analysed</span></div><div><strong>{modules.filter((m) => m.risk === "high").length}</strong><span>High risk</span></div><div><strong>{modules.filter((m) => m.risk === "medium").length}</strong><span>Medium risk</span></div><div><strong>{modules.filter((m) => m.risk === "low").length}</strong><span>Low risk</span></div></div>
+    <div className="module-summary-strip"><div><strong>{moduleInventory.length}</strong><span>Modules analysed</span></div><div><strong>{moduleInventory.filter((m) => m.risk === "high").length}</strong><span>High risk</span></div><div><strong>{moduleInventory.filter((m) => m.risk === "medium").length}</strong><span>Medium risk</span></div><div><strong>{moduleInventory.filter((m) => m.risk === "low").length}</strong><span>Low risk</span></div></div>
     <div className="card">
       <div className="card-heading"><div><h2>Module inventory</h2><p>Sort and filter modules to locate maintenance hotspots.</p></div><button className="button-secondary" onClick={() => notify("Module CSV export will be enabled with report exports.")}><Download size={15} /> Export</button></div>
       <div className="table-toolbar"><div className="search-field"><Search size={15} /><input placeholder="Find a module..." value={moduleQuery} onChange={(e) => setModuleQuery(e.target.value)} /></div><select className="select-control" value={moduleFilter} onChange={(e) => setModuleFilter(e.target.value)} aria-label="Filter module risk"><option value="all">All risks</option><option value="high">High risk</option><option value="medium">Medium risk</option><option value="low">Low risk</option></select><select className="select-control" value={moduleSort} onChange={(e) => setModuleSort(e.target.value as typeof moduleSort)} aria-label="Sort modules"><option value="risk">Sort: Risk</option><option value="lines">Sort: LOC</option><option value="path">Sort: Name</option></select></div>
@@ -606,24 +612,24 @@ export default function App() {
       {filteredModules.length === 0 && <EmptyState icon={<FileCode2 size={22} />} title="No matching modules" copy="Change the risk filter or search for another module path." />}
     </div>
     <div className="card treemap-card"><div className="card-heading"><div><h2>Codebase risk map</h2><p>Tile area represents lines of code; colour indicates maintenance risk.</p></div><div className="treemap-legend"><span><i className="low" /> Low</span><span><i className="medium" /> Medium</span><span><i className="high" /> High</span></div></div>
-      <div className="treemap-grid">{modules.slice(0, 12).map((module) => <button key={module.id} className={"treemap-tile " + riskClass(module.risk)} style={{ flexGrow: Math.max(1, module.lines_of_code / 280), flexBasis: Math.max(125, Math.min(255, module.lines_of_code / 9)) + "px" }} onClick={() => setSelectedModule(module)}><strong>{module.path.split("/").pop()}</strong><span>{module.lines_of_code.toLocaleString()} LOC</span><small>{module.risk} risk</small></button>)}</div>
+      <div className="treemap-grid">{moduleInventory.slice(0, 12).map((module) => <button key={module.id} className={"treemap-tile " + riskClass(module.risk)} style={{ flexGrow: Math.max(1, module.lines_of_code / 280), flexBasis: Math.max(125, Math.min(255, module.lines_of_code / 9)) + "px" }} onClick={() => setSelectedModule(module)}><strong>{module.path.split("/").pop()}</strong><span>{module.lines_of_code.toLocaleString()} LOC</span><small>{module.risk} risk</small></button>)}</div>
     </div>
   </div>;
 
   const renderRisks = () => <div className="page-stack">
     <div className="risk-overview-grid">
       <div className="card risk-overview-card"><div className="eyebrow muted">TOTAL TECHNICAL DEBT</div><strong>146h</strong><p>Estimated refactoring effort across the analysed modules.</p><div className="risk-stat-foot"><span className="positive-trend">↓ 12h</span><span>from the previous assessment</span></div></div>
-      <div className="card risk-overview-card"><div className="eyebrow muted">HIGH-RISK MODULES</div><strong>{modules.filter((m) => m.risk === "high").length}</strong><p>Modules with elevated maintenance probability.</p><div className="risk-stat-foot"><span className="risk-dot high" /> <span>Needs engineering attention</span></div></div>
+      <div className="card risk-overview-card"><div className="eyebrow muted">HIGH-RISK MODULES</div><strong>{moduleInventory.filter((m) => m.risk === "high").length}</strong><p>Modules with elevated maintenance probability.</p><div className="risk-stat-foot"><span className="risk-dot high" /> <span>Needs engineering attention</span></div></div>
       <div className="card risk-overview-card"><div className="eyebrow muted">TECHNICAL DEBT RATIO</div><strong>18.6%</strong><p>Estimated rework compared with total implementation effort.</p><div className="risk-stat-foot"><span className="trend-down">−2.1%</span><span>since the prior scan</span></div></div>
     </div>
     <div className="content-grid risk-content-grid">
       <div className="card">
         <div className="card-heading"><div><h2>Refactoring priority</h2><p>Ranked by estimated probability of maintenance friction.</p></div><span className="eyebrow muted">TOP {modules.length}</span></div>
-        <div className="ranked-risk-list">{[...modules].sort((a, b) => b.risk_probability - a.risk_probability).map((module, i) => <button className="ranked-risk-row" key={module.id} onClick={() => { setSelectedModule(module); changePage("modules"); }}><span className="rank-number">{String(i + 1).padStart(2, "0")}</span><span className="rank-main"><strong>{module.path.split("/").pop()}</strong><small>{module.path}</small><i className="risk-bar"><b className={riskClass(module.risk)} style={{ width: module.risk_probability + "%" }} /></i></span><span className="rank-probability">{module.risk_probability}%<small>risk</small></span><span className="rank-hours">{module.estimated_refactor_hours}h<small>estimate</small></span></button>)}</div>
+        <div className="ranked-risk-list">{[...moduleInventory].sort((a, b) => b.risk_probability - a.risk_probability).map((module, i) => <button className="ranked-risk-row" key={module.id} onClick={() => { setSelectedModule(module); changePage("modules"); }}><span className="rank-number">{String(i + 1).padStart(2, "0")}</span><span className="rank-main"><strong>{module.path.split("/").pop()}</strong><small>{module.path}</small><i className="risk-bar"><b className={riskClass(module.risk)} style={{ width: module.risk_probability + "%" }} /></i></span><span className="rank-probability">{module.risk_probability}%<small>risk</small></span><span className="rank-hours">{module.estimated_refactor_hours}h<small>estimate</small></span></button>)}</div>
       </div>
       <div className="risk-side-stack">
         <div className="card top-action-card"><div className="action-spark"><Sparkles size={17} /></div><div className="eyebrow muted">TOP ACTION</div><h2>Break down the payment service.</h2><p><strong>src/services/payment.ts</strong> has high complexity and long functions. Extract payment validation and retry orchestration into smaller units.</p><div className="action-impact"><div><strong>18h</strong><span>Estimated effort</span></div><div><strong>+6 pts</strong><span>Potential score gain</span></div></div><button className="button-primary" onClick={() => notify("Refactoring plans arrive in Step 6.")}>View recommendation <ArrowRight size={15} /></button></div>
-        <div className="card risk-breakdown-card"><h3>Risk distribution</h3>{(["high", "medium", "low"] as Risk[]).map((risk) => <div className="risk-breakdown-row" key={risk}><span><RiskPill risk={risk} /></span><strong>{modules.filter((m) => m.risk === risk).length}</strong><small>modules</small></div>)}</div>
+        <div className="card risk-breakdown-card"><h3>Risk distribution</h3>{(["high", "medium", "low"] as Risk[]).map((risk) => <div className="risk-breakdown-row" key={risk}><span><RiskPill risk={risk} /></span><strong>{moduleInventory.filter((m) => m.risk === risk).length}</strong><small>modules</small></div>)}</div>
       </div>
     </div>
   </div>;
