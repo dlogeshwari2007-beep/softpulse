@@ -509,7 +509,6 @@ export default function App() {
         <div className="metric-value-row"><strong>{item[2]}{item[0] === "duplication_pct" || item[0] === "test_coverage_pct" ? "%" : ""}</strong><span className={item[4] === "positive" ? "delta positive-trend" : "delta neutral-trend"}>{item[3]}</span></div>
         <Sparkline values={sparkData[i]} />
       </div>)}
-    </div>)}
     </div>
     <div className="content-grid two-one">
       <section className="card chart-card">
