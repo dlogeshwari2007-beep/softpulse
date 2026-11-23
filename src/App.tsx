@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   Activity, AlertCircle, AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight,
@@ -19,7 +19,8 @@ type Role = "admin" | "manager" | "engineer" | "viewer";
 type Risk = "low" | "medium" | "high";
 type Mode = "signin" | "signup" | "reset";
 type Project = { id: string; name: string; repo_url: string; repo_owner?: string; repo_name?: string; default_branch?: string; created_at?: string; grade?: string; health_score?: number; last_scan?: string; trend?: number };
-type Scan = { id: string; project_id: string; status: string; progress?: number; health_score?: number; grade?: string; commit_sha?: string; commit_message?: string; commit_author?: string; created_at?: string; started_at?: string; completed_at?: string };
+type ScanLogEntry = { at?: string; stage?: string; progress?: number; message: string };
+type Scan = { id: string; project_id: string; status: string; progress?: number; current_stage?: string; current_file?: string | null; progress_log?: ScanLogEntry[]; health_score?: number; grade?: string; commit_sha?: string; commit_message?: string; commit_author?: string; error_message?: string | null; cancelled_at?: string | null; created_at?: string; started_at?: string; completed_at?: string };
 type Module = { id: string; scan_id?: string; project_id?: string; path: string; language?: string; lines_of_code: number; risk: Risk; risk_probability: number; estimated_refactor_hours: number; technical_debt_ratio: number; complexity?: number; coverage?: number; smells?: number };
 type MetricRecord = { scan_id: string; module_id?: string | null; metric_key: string; raw_value: number | null; normalized_score: number; weight: number };
 
@@ -153,6 +154,9 @@ export default function App() {
   ]);
   const [loading, setLoading] = useState(false);
   const [scanningProjectId, setScanningProjectId] = useState<string | null>(null);
+  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "error" | "offline">("offline");
+  const cancelledDemoScanIds = useRef<Set<string>>(new Set());
+  const scanLogRef = useRef<HTMLDivElement | null>(null);
   const [dataError, setDataError] = useState("");
   const [toast, setToast] = useState("");
   const [globalQuery, setGlobalQuery] = useState("");
@@ -173,6 +177,9 @@ export default function App() {
   const [compareB, setCompareB] = useState("s3");
 
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
+  useEffect(() => {
+    scanLogRef.current?.scrollTo({ top: scanLogRef.current.scrollHeight, behavior: "smooth" });
+  }, [selectedScanId, scans.find((scan) => scan.id === selectedScanId)?.progress_log]);
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 3200);
