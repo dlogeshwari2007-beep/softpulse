@@ -282,19 +282,28 @@ Deno.serve(async (request) => {
         progress_log: nextLog
       };
       if (typeof healthScore === "number") updates.health_score = Number(healthScore.toFixed(2));
-      const { error } = await serviceClient.from("scans").update(updates).eq("id", scanId);
+      const { data: updated, error } = await serviceClient
+        .from("scans")
+        .update(updates)
+        .eq("id", scanId)
+        .eq("status", "running")
+        .select("id")
+        .maybeSingle();
       if (error) throw error;
+      if (!updated) await ensureScanActive();
     };
 
     await updateStage(6, "Clone", null, "Repository metadata confirmed. Fetching the latest commit.");
     const commitResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/commits/" + branch, { headers: githubHeaders });
     const commit = commitResponse.ok ? await commitResponse.json() : null;
     await ensureScanActive();
-    await serviceClient.from("scans").update({
+    const { error: commitUpdateError } = await serviceClient.from("scans").update({
       commit_sha: commit?.sha ?? null,
       commit_message: commit?.commit?.message?.split("\n")[0] ?? null,
       commit_author: commit?.commit?.author?.name ?? null
-    }).eq("id", scanId);
+    }).eq("id", scanId).eq("status", "running");
+    if (commitUpdateError) throw commitUpdateError;
+    await ensureScanActive();
 
     await updateStage(14, "Parse", null, "Repository commit identified. Reading the recursive file tree.");
     const treeResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository + "/git/trees/" + branch + "?recursive=1", { headers: githubHeaders });
@@ -471,6 +480,16 @@ Deno.serve(async (request) => {
     await updateStage(96, "Report", null, "Saved " + moduleRows.length + " modules and " + (metricRows.length + moduleMetricRows.length) + " metric measurements.");
     await ensureScanActive();
 
+    const currentBeforeComplete = await ensureScanActive();
+    const completedLog = [
+      ...(Array.isArray(currentBeforeComplete.progress_log) ? currentBeforeComplete.progress_log : []),
+      {
+        at: new Date().toISOString(),
+        stage: "Report",
+        progress: 100,
+        message: "Scan completed. Health score and module report are ready."
+      }
+    ].slice(-120);
     const { data: completed, error: completeError } = await serviceClient.from("scans").update({
       status: "completed",
       progress: 100,
@@ -478,8 +497,9 @@ Deno.serve(async (request) => {
       current_file: null,
       health_score: healthScore,
       grade,
+      progress_log: completedLog,
       completed_at: new Date().toISOString()
-    }).eq("id", scanId).select("*").single();
+    }).eq("id", scanId).eq("status", "running").select("*").single();
     if (completeError) throw completeError;
 
     return new Response(JSON.stringify({
