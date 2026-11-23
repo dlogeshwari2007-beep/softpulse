@@ -413,42 +413,199 @@ export default function App() {
       return;
     }
     setScanningProjectId(project.id);
+    let pendingScanId: string | null = null;
     try {
-      if (supabase && !demoMode) {
+      if (supabase && !demoMode && userId) {
+        const { data: queuedScan, error: queueError } = await supabase.from("scans").insert({
+          project_id: project.id,
+          started_by: userId,
+          status: "queued",
+          progress: 0,
+          current_stage: "Clone",
+          progress_log: [{
+            at: new Date().toISOString(),
+            stage: "Clone",
+            progress: 0,
+            message: "Scan queued. Waiting for the repository analyzer to start."
+          }]
+        }).select("*").single();
+        if (queueError) throw queueError;
+
+        pendingScanId = queuedScan.id;
+        setScans((current) => [queuedScan as Scan, ...current]);
+        setSelectedScanId(queuedScan.id);
+        setPage("scans");
+        setMobileNavOpen(false);
+
         const { data, error } = await supabase.functions.invoke("run-scan", {
-          body: { repo_url: project.repo_url, project_id: project.id }
+          body: { repo_url: project.repo_url, project_id: project.id, scan_id: queuedScan.id }
         });
         if (error) throw error;
+        if (data?.cancelled) {
+          notify("Scan cancelled. The live status has been saved.");
+          await loadWorkspace(userId);
+          return;
+        }
         if (data?.error) throw new Error(data.error);
         if (!data?.scan?.id) throw new Error("The scan function did not return a scan result.");
-        await loadWorkspace(userId || undefined);
+        await loadWorkspace(userId);
         setSelectedScanId(data.scan.id);
-        changePage("scans");
+        setPage("scans");
         notify("Repository scan completed. Your health report is ready.");
       } else {
         const nextId = "demo-scan-" + Date.now();
+        pendingScanId = nextId;
         const nextScore = Math.min(96, Math.max(58, (project.health_score || 70) + 3));
+        const startedAt = new Date().toISOString();
+        const initialLog: ScanLogEntry = {
+          at: startedAt, stage: "Clone", progress: 2,
+          message: "Demo scan started. Connecting to the sample repository."
+        };
+        const runningScan: Scan = {
+          id: nextId, project_id: project.id, status: "running", progress: 2,
+          current_stage: "Clone", current_file: null, health_score: 0,
+          commit_sha: "demo" + String(Date.now()).slice(-4),
+          commit_message: "Manual SoftPulse demo assessment",
+          commit_author: "Demo user", created_at: startedAt,
+          started_at: startedAt, progress_log: [initialLog]
+        };
+        setScans((current) => [runningScan, ...current]);
+        setSelectedScanId(nextId);
+        setPage("scans");
+        setMobileNavOpen(false);
+        notify("Demo scan started. Progress will update in this preview.");
+
+        const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+        const demoSteps: { stage: string; progress: number; message: string; file?: string; score?: number }[] = [
+          { stage: "Clone", progress: 8, message: "Repository metadata loaded. Fetching the latest branch." },
+          { stage: "Parse", progress: 18, message: "Parsed the source tree and identified supported files." },
+          { stage: "Measure", progress: 28, message: "Started measuring source files.", file: "src/index.ts" },
+          { stage: "Measure", progress: 39, message: "Measured module complexity and function length.", file: "src/services/payment.ts" },
+          { stage: "Measure", progress: 52, message: "Measured duplication, comments and code smells.", file: "src/transform/mapper.ts" },
+          { stage: "Measure", progress: 68, message: "Checked test files and dependency manifests.", file: "package.json" },
+          { stage: "Score", progress: 72, message: "Normalised metric 1 of 12: lines of code.", score: 66 },
+          { stage: "Score", progress: 74, message: "Normalised metric 2 of 12: cyclomatic complexity.", score: 69 },
+          { stage: "Score", progress: 76, message: "Normalised metric 3 of 12: maintainability index.", score: 73 },
+          { stage: "Score", progress: 78, message: "Normalised metric 4 of 12: duplication.", score: 76 },
+          { stage: "Score", progress: 80, message: "Normalised metric 5 of 12: code smells.", score: 78 },
+          { stage: "Score", progress: 82, message: "Normalised metric 6 of 12: comment ratio.", score: 80 },
+          { stage: "Score", progress: 84, message: "Normalised metric 7 of 12: function length.", score: 82 },
+          { stage: "Score", progress: 86, message: "Normalised metric 8 of 12: nesting depth.", score: 84 },
+          { stage: "Score", progress: 88, message: "Normalised metric 9 of 12: test coverage.", score: 86 },
+          { stage: "Score", progress: 90, message: "Normalised metric 10 of 12: test-to-code ratio.", score: 87 },
+          { stage: "Score", progress: 92, message: "Normalised metric 11 of 12: outdated dependencies.", score: 88 },
+          { stage: "Score", progress: 94, message: "Normalised metric 12 of 12: vulnerable dependencies.", score: nextScore },
+          { stage: "Report", progress: 97, message: "Generating the module risk report and refactoring priorities.", score: nextScore }
+        ];
+        for (const step of demoSteps) {
+          await wait(360);
+          if (cancelledDemoScanIds.current.has(nextId)) {
+            cancelledDemoScanIds.current.delete(nextId);
+            return;
+          }
+          const entry: ScanLogEntry = { at: new Date().toISOString(), stage: step.stage, progress: step.progress, message: step.message };
+          setScans((current) => current.map((scan) => scan.id === nextId ? {
+            ...scan,
+            status: "running",
+            progress: step.progress,
+            current_stage: step.stage,
+            current_file: step.file ?? null,
+            health_score: step.score ?? scan.health_score,
+            progress_log: [...(scan.progress_log ?? []), entry].slice(-120)
+          } : scan));
+        }
+        await wait(300);
+        if (cancelledDemoScanIds.current.has(nextId)) {
+          cancelledDemoScanIds.current.delete(nextId);
+          return;
+        }
+        const completedLog: ScanLogEntry = {
+          at: new Date().toISOString(), stage: "Report", progress: 100,
+          message: "Scan completed. Health score and module report are ready."
+        };
         const nextScan: Scan = {
-          id: nextId, project_id: project.id, status: "completed", progress: 100,
-          health_score: nextScore, grade: gradeFrom(nextScore), commit_sha: "demo" + String(Date.now()).slice(-4),
-          commit_message: "Manual SoftPulse demo assessment", commit_author: "Demo user", created_at: new Date().toISOString()
+          ...runningScan, status: "completed", progress: 100, current_stage: "Report",
+          current_file: null, health_score: nextScore, grade: gradeFrom(nextScore),
+          completed_at: new Date().toISOString(),
+          progress_log: [...(runningScan.progress_log ?? []), ...demoSteps.map((step) => ({ at: startedAt, stage: step.stage, progress: step.progress, message: step.message })), completedLog]
         };
         const nextModules = demoModules.slice(0, 5).map((module, index) => ({
           ...module, id: nextId + "-m" + index, scan_id: nextId, project_id: project.id
         }));
-        setScans((current) => [nextScan, ...current]);
+        setScans((current) => current.map((scan) => scan.id === nextId ? nextScan : scan));
         setModules((current) => [...nextModules, ...current]);
         setProjects((current) => current.map((item) => item.id === project.id
           ? { ...item, health_score: nextScore, grade: gradeFrom(nextScore), last_scan: "Just now", trend: 3 }
           : item));
-        setSelectedScanId(nextId);
-        changePage("scans");
         notify("Demo scan completed. Sample report generated.");
       }
     } catch (cause) {
-      notify(cause instanceof Error ? cause.message : "Unable to start repository scan.");
+      const message = cause instanceof Error ? cause.message : "Unable to start repository scan.";
+      if (pendingScanId && supabase && !demoMode) {
+        await supabase.from("scans").update({
+          status: "failed",
+          error_message: message,
+          current_stage: "Report",
+          completed_at: new Date().toISOString()
+        }).eq("id", pendingScanId).in("status", ["queued", "running"]);
+      }
+      notify(message);
     } finally {
       setScanningProjectId(null);
+    }
+  };
+
+  const cancelSelectedScan = async () => {
+    const scan = selectedScan;
+    if (!scan || !["queued", "running"].includes(scan.status)) return;
+    if (!canScan) {
+      notify("Only an admin, manager or engineer can cancel a scan.");
+      return;
+    }
+    if (!window.confirm("Cancel this scan? The partial results will remain in scan history.")) return;
+
+    if (demoMode) {
+      cancelledDemoScanIds.current.add(scan.id);
+      const logEntry: ScanLogEntry = {
+        at: new Date().toISOString(), stage: "Cancelled", progress: scan.progress ?? 0,
+        message: "Demo scan cancelled by the workspace user."
+      };
+      setScans((current) => current.map((item) => item.id === scan.id ? {
+        ...item, status: "cancelled", current_stage: "Cancelled", current_file: null,
+        cancelled_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+        progress_log: [...(item.progress_log ?? []), logEntry]
+      } : item));
+      notify("Demo scan cancelled.");
+      return;
+    }
+
+    if (!supabase) return;
+    try {
+      const logEntry: ScanLogEntry = {
+        at: new Date().toISOString(), stage: "Cancelled", progress: scan.progress ?? 0,
+        message: "Cancellation requested by a workspace user."
+      };
+      const { data, error } = await supabase.from("scans").update({
+        status: "cancelled",
+        current_stage: "Cancelled",
+        current_file: null,
+        cancelled_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        progress_log: [...(scan.progress_log ?? []), logEntry].slice(-120)
+      }).eq("id", scan.id).in("status", ["queued", "running"]).select("id").maybeSingle();
+      if (error) throw error;
+      if (!data) {
+        notify("This scan has already finished or been cancelled.");
+        return;
+      }
+      setScans((current) => current.map((item) => item.id === scan.id ? {
+        ...item, status: "cancelled", current_stage: "Cancelled", current_file: null,
+        cancelled_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+        progress_log: [...(item.progress_log ?? []), logEntry].slice(-120)
+      } : item));
+      notify("Cancellation requested. The scanner will stop at its next checkpoint.");
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : "Unable to cancel this scan.");
     }
   };
 
