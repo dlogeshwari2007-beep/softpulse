@@ -166,6 +166,7 @@ Deno.serve(async (request) => {
     const repositoryResponse = await fetch("https://api.github.com/repos/" + owner + "/" + repository, { headers: githubHeaders });
     if (!repositoryResponse.ok) throw new Error(repositoryResponse.status === 404 ? "Repository not found or is not public." : "GitHub repository lookup failed (" + repositoryResponse.status + ").");
     const repositoryInfo = await repositoryResponse.json();
+    if (repositoryInfo.private) throw new Error("SoftPulse currently accepts public GitHub repositories only.");
     const branch = repositoryInfo.default_branch || "main";
 
     let projectId = typeof body.project_id === "string" ? body.project_id : null;
