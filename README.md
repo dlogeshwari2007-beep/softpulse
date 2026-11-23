@@ -27,6 +27,8 @@ Open the local URL printed by Vite. Without Supabase environment variables, Soft
 - Dashboard with workspace health gauge, grade, quality indicator cards, score trend, high-risk modules and recent scans.
 - Projects grid with grade/trend, text and grade filters, and validated Add Repository dialog.
 - Scan detail report with Clone → Parse → Measure → Score → Report pipeline, score summary and assessment metadata.
+- Authenticated `run-scan` Supabase Edge Function: reads public GitHub source, measures repository metrics, calculates the weighted grade, and writes scan/module/metric records.
+- Project cards can start a scan; the demo workspace generates sample completed assessments without contacting GitHub.
 - Module inventory with filtering, sorting, risk pills, code-risk map and module detail drawer.
 - Risk ranking with probability bars, estimated refactoring effort, technical debt summary and top action.
 - Scan history timeline and side-by-side scan comparison.
@@ -42,9 +44,21 @@ Open the local URL printed by Vite. Without Supabase environment variables, Soft
 - Only admins can manage user roles and metric weights.
 - First-admin bootstrap is intended for a fresh Supabase project. Do not remove all role rows after launch.
 
+## Deploy the scan function
+
+From a machine with the Supabase CLI installed and this repository cloned:
+
+```bash
+supabase login
+supabase link --project-ref YOUR_PROJECT_REF
+supabase functions deploy run-scan
+```
+
+The hosted function uses the Supabase URL, anon key and service-role key injected by Supabase. An optional `GITHUB_TOKEN` function secret raises the GitHub API rate limit for repository reads. Never put the service-role key or GitHub token in Vite environment variables. Configure CORS with the `APP_ORIGIN` function secret to restrict browser requests to your deployed app origin.
+
 ## What's not implemented yet
 
-Phase 2 is the approved base application checkpoint. The actual GitHub scanning engine / Edge Function, live scan streaming, webhook autoscan, notifications, forecasting, what-if simulator, AI refactoring assistant, benchmarking, report sharing, power-user tools and reliability layer are intentionally deferred to Steps 1–10 after base-screen approval. Sample charts and measurements in demo mode are illustrative data, not analysis of a live repository.
+Phase 2 is the approved base application checkpoint. Live scan streaming across tabs, webhook autoscan, notifications, forecasting, what-if simulator, AI refactoring assistant, benchmarking, report sharing, power-user tools and reliability layer are intentionally deferred to Steps 1–10 after base-screen approval. Sample charts and measurements in demo mode are illustrative data, not analysis of a live repository.
 
 ## Deployment
 
