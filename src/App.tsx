@@ -188,7 +188,7 @@ export default function App() {
         supabase.from("scans").select("*").order("created_at", { ascending: false }).limit(100),
         supabase.from("modules").select("*").order("risk_probability", { ascending: false }).limit(200),
         supabase.from("user_roles").select("role").eq("user_id", id).maybeSingle(),
-        supabase.from("metrics").select("scan_id,module_id,metric_key,raw_value,normalized_score,weight").order("measured_at", { ascending: false }).limit(500)
+        supabase.from("metrics").select("scan_id,module_id,metric_key,raw_value,normalized_score,weight").order("measured_at", { ascending: false }).limit(5000)
       ]);
       if (projectResult.error) throw projectResult.error;
       if (scanResult.error) throw scanResult.error;
