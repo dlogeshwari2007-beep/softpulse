@@ -23,6 +23,21 @@ type ScanLogEntry = { at?: string; stage?: string; progress?: number; message: s
 type Scan = { id: string; project_id: string; status: string; trigger_source?: "manual" | "push"; progress?: number; current_stage?: string; current_file?: string | null; progress_log?: ScanLogEntry[]; health_score?: number; grade?: string; commit_sha?: string; commit_message?: string; commit_author?: string; error_message?: string | null; cancelled_at?: string | null; created_at?: string; started_at?: string; completed_at?: string };
 type Module = { id: string; scan_id?: string; project_id?: string; path: string; language?: string; lines_of_code: number; risk: Risk; risk_probability: number; estimated_refactor_hours: number; technical_debt_ratio: number; complexity?: number; coverage?: number; smells?: number };
 type MetricRecord = { scan_id: string; module_id?: string | null; metric_key: string; raw_value: number | null; normalized_score: number; weight: number };
+type NotificationItem = { id: string; user_id: string; activity_event_id: string; notification_type: "scan_completed" | "scan_failed" | "health_drop"; title: string; message: string; read_at: string | null; created_at: string };
+type ActivityEvent = { id: string; event_type: string; title: string; message: string; project_id: string | null; scan_id: string | null; created_at: string };
+type NotificationPreferences = { scan_completed_enabled: boolean; scan_failed_enabled: boolean; health_drop_enabled: boolean; health_drop_threshold: number };
+const defaultNotificationPreferences: NotificationPreferences = {
+  scan_completed_enabled: true, scan_failed_enabled: true, health_drop_enabled: true, health_drop_threshold: 5
+};
+const demoActivityEvents: ActivityEvent[] = [
+  { id: "demo-event-1", event_type: "scan_completed", title: "Assessment completed", message: "commons-utils scored 91/100 with Grade A.", project_id: "p1", scan_id: "s1", created_at: "2026-11-23T08:10:00Z" },
+  { id: "demo-event-2", event_type: "scan_completed", title: "Assessment completed", message: "payments-api scored 78/100 with Grade B.", project_id: "p2", scan_id: "s2", created_at: "2026-11-23T06:00:00Z" },
+  { id: "demo-event-3", event_type: "project_added", title: "Repository connected", message: "customer-portal was added to the workspace.", project_id: "p3", scan_id: null, created_at: "2026-11-22T08:00:00Z" }
+];
+const demoNotifications: NotificationItem[] = [
+  { id: "demo-notification-1", user_id: "demo", activity_event_id: "demo-event-1", notification_type: "scan_completed", title: "Assessment completed", message: "commons-utils scored 91/100 with Grade A.", read_at: null, created_at: "2026-11-23T08:10:00Z" },
+  { id: "demo-notification-2", user_id: "demo", activity_event_id: "demo-event-2", notification_type: "scan_completed", title: "Assessment completed", message: "payments-api scored 78/100 with Grade B.", read_at: null, created_at: "2026-11-23T06:00:00Z" }
+];
 
 const metricWeights = [
   { key: "lines_of_code", label: "Lines of code", weight: 4, direction: "Lower is better", note: "Large modules are harder to understand and change." },
@@ -164,6 +179,11 @@ export default function App() {
   const [globalQuery, setGlobalQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [notificationTab, setNotificationTab] = useState<"notifications" | "activity">("notifications");
+  const [notifications, setNotifications] = useState<NotificationItem[]>(demoNotifications);
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>(demoActivityEvents);
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences);
+  const [notificationError, setNotificationError] = useState("");
   const [showAddProject, setShowAddProject] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoNameInput, setRepoNameInput] = useState("");
@@ -212,6 +232,25 @@ export default function App() {
       setScans((scanResult.data ?? []) as Scan[]);
       setModules((moduleResult.data ?? []) as Module[]);
       setMetricRows((metricResult.data ?? []) as MetricRecord[]);
+
+      const [notificationResult, activityResult, preferenceResult] = await Promise.all([
+        supabase.from("notifications").select("*").eq("user_id", id).order("created_at", { ascending: false }).limit(40),
+        supabase.from("activity_events").select("id,event_type,title,message,project_id,scan_id,created_at").order("created_at", { ascending: false }).limit(40),
+        supabase.from("notification_preferences").select("scan_completed_enabled,scan_failed_enabled,health_drop_enabled,health_drop_threshold").eq("user_id", id).maybeSingle()
+      ]);
+      const feedError = notificationResult.error || activityResult.error || preferenceResult.error;
+      if (feedError) {
+        setNotificationError("Apply migration 0006_notifications_activity.sql to enable saved notifications.");
+      } else {
+        setNotificationError("");
+        setNotifications((notificationResult.data ?? []) as NotificationItem[]);
+        setActivityEvents((activityResult.data ?? []) as ActivityEvent[]);
+        setNotificationPreferences({
+          ...defaultNotificationPreferences,
+          ...(preferenceResult.data ?? {}),
+          health_drop_threshold: Number(preferenceResult.data?.health_drop_threshold ?? defaultNotificationPreferences.health_drop_threshold)
+        });
+      }
       if (weightResult.data?.length) setWeightRows(weightResult.data.map((weight: any) => ({ key: weight.metric_key, label: weight.label, weight: Math.round(Number(weight.weight) * 100), direction: weight.direction === "higher_better" ? "Higher is better" : weight.direction === "lower_better" ? "Lower is better" : "Informational", note: weight.explanation })));
       if (roleResult.data?.role) setRole(roleResult.data.role as Role);
 
@@ -303,6 +342,12 @@ export default function App() {
         }
         scheduleWorkspaceRefresh();
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications", filter: "user_id=eq." + userId }, () => {
+        scheduleWorkspaceRefresh();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "activity_events" }, () => {
+        scheduleWorkspaceRefresh();
+      })
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setRealtimeStatus("connected");
         else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setRealtimeStatus("error");
@@ -320,6 +365,72 @@ export default function App() {
   }, [userId, demoMode, loadWorkspace]);
 
   const notify = (message: string) => setToast(message);
+  const unreadNotificationCount = notifications.filter((item) => !item.read_at).length;
+
+  const markNotificationRead = async (notification: NotificationItem) => {
+    if (notification.read_at) return;
+    const readAt = new Date().toISOString();
+    if (supabase && !demoMode && userId) {
+      const { error } = await supabase.from("notifications")
+        .update({ read_at: readAt })
+        .eq("id", notification.id)
+        .eq("user_id", userId);
+      if (error) {
+        notify("Unable to mark this notification as read.");
+        return;
+      }
+    }
+    setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, read_at: readAt } : item));
+  };
+
+  const markAllNotificationsRead = async () => {
+    const unread = notifications.filter((item) => !item.read_at);
+    if (!unread.length) return;
+    const readAt = new Date().toISOString();
+    if (supabase && !demoMode && userId) {
+      const { error } = await supabase.from("notifications")
+        .update({ read_at: readAt })
+        .eq("user_id", userId)
+        .is("read_at", null);
+      if (error) {
+        notify("Unable to mark notifications as read.");
+        return;
+      }
+    }
+    setNotifications((current) => current.map((item) => item.read_at ? item : { ...item, read_at: readAt }));
+  };
+
+  const updateNotificationPreferences = async (patch: Partial<NotificationPreferences>) => {
+    const previous = notificationPreferences;
+    const next = { ...previous, ...patch };
+    if (next.health_drop_threshold < 1 || next.health_drop_threshold > 50) return;
+    setNotificationPreferences(next);
+    if (supabase && !demoMode && userId) {
+      const { error } = await supabase.from("notification_preferences")
+        .update(patch)
+        .eq("user_id", userId);
+      if (error) {
+        setNotificationPreferences(previous);
+        notify("Unable to save alert preferences. Check that migration 0006 is applied.");
+        return;
+      }
+    }
+    notify("Alert preferences saved.");
+  };
+
+  const openActivityItem = (item: { scan_id: string | null; project_id: string | null }) => {
+    setShowNotifications(false);
+    if (item.scan_id) {
+      const matchingScan = scans.find((scan) => scan.id === item.scan_id);
+      if (matchingScan) {
+        setSelectedScanId(matchingScan.id);
+        changePage("scans");
+        return;
+      }
+    }
+    changePage("projects");
+  };
+
   const isAdmin = demoMode || role === "admin";
   const canScan = demoMode || ["admin", "manager", "engineer"].includes(role);
   const selectedScan = scans.find((scan) => scan.id === selectedScanId) || scans[0];
@@ -957,6 +1068,14 @@ export default function App() {
 
   const renderSettings = () => <div className="page-stack">
     <div className="card webhook-card"><div className="settings-icon"><Github size={20} /></div><div className="webhook-copy"><h2>GitHub push automation</h2><p>Connect a signed GitHub push webhook. SoftPulse verifies the HMAC signature, checks the repository and default branch, then queues an assessment when project auto-scan is enabled.</p><label>Webhook payload URL</label><div className="webhook-url-row"><code>{webhookEndpoint}</code><button className="button-secondary" onClick={() => { void navigator.clipboard.writeText(webhookEndpoint).then(() => notify("Webhook URL copied.")).catch(() => notify("Clipboard access is unavailable. Copy the URL shown here.")); }}><Copy size={14} /> Copy URL</button></div><ol><li>Deploy the <code>github-webhook</code> and updated <code>run-scan</code> Edge Functions.</li><li>Set <code>GITHUB_WEBHOOK_SECRET</code> in Supabase and enter the same secret in GitHub → Settings → Webhooks.</li><li>Choose <code>application/json</code> and enable <strong>Just the push event</strong>.</li><li>Keep <strong>Auto-scan on push</strong> enabled on the project card. Only the configured default branch is scanned.</li></ol><small>“Simulate push” exercises the in-app scan flow; only a real GitHub delivery exercises signature verification.</small></div></div>
+    <div className="card notification-preferences-card">
+      <div className="card-heading"><div><h2>Alert preferences</h2><p>Choose which assessment events create an in-app notification for your account.</p></div><span className="feed-settings-tag">YOUR ACCOUNT</span></div>
+      <div className="notification-preference-row"><div><strong>Assessment completed</strong><small>Notify me when a repository scan finishes successfully.</small></div><label className="preference-switch"><input type="checkbox" checked={notificationPreferences.scan_completed_enabled} onChange={(event) => void updateNotificationPreferences({ scan_completed_enabled: event.target.checked })} /><span /></label></div>
+      <div className="notification-preference-row"><div><strong>Assessment failed</strong><small>Notify me when a repository scan cannot complete.</small></div><label className="preference-switch"><input type="checkbox" checked={notificationPreferences.scan_failed_enabled} onChange={(event) => void updateNotificationPreferences({ scan_failed_enabled: event.target.checked })} /><span /></label></div>
+      <div className="notification-preference-row"><div><strong>Health score drop</strong><small>Notify me when the latest completed scan falls below the previous score by the threshold.</small></div><label className="preference-switch"><input type="checkbox" checked={notificationPreferences.health_drop_enabled} onChange={(event) => void updateNotificationPreferences({ health_drop_enabled: event.target.checked })} /><span /></label></div>
+      <div className="notification-threshold-row"><div><strong>Score-drop threshold</strong><small>Minimum decrease required before a health alert is created.</small></div><div className="threshold-control"><input aria-label="Health score drop threshold" type="range" min="1" max="20" step="1" value={notificationPreferences.health_drop_threshold} onChange={(event) => void updateNotificationPreferences({ health_drop_threshold: Number(event.target.value) })} /><strong>{notificationPreferences.health_drop_threshold} points</strong></div></div>
+      {notificationError && <p className="notification-inline-error">{notificationError}</p>}
+    </div>
     <div className="card settings-intro"><div className="settings-icon"><SlidersHorizontal size={20} /></div><div><h2>Health score methodology</h2><p>SoftPulse normalises each metric to a 0–100 quality score, then calculates a weighted average. Weights are stored in the database and sum to 100%.</p></div></div>
     <div className="card"><div className="card-heading"><div><h2>Metric weights</h2><p>Each weight shows how much the metric contributes to the final score.</p></div><span className="weight-total">100% total</span></div>
       <div className="weights-list">{weightRows.map((metric) => <div className="weight-row" key={metric.key}><div className="weight-name"><strong>{metric.label}</strong><small>{metric.note}</small></div><div className="weight-meter"><i style={{ width: metric.weight * 6 + "%" }} /></div><strong className="weight-value">{metric.weight}%</strong><span className="direction-tag">{metric.direction}</span></div>)}</div>
@@ -998,7 +1117,29 @@ export default function App() {
           <div className="global-search-wrap"><Search size={15} /><input value={globalQuery} onFocus={() => setShowSearch(true)} onChange={(e) => { setGlobalQuery(e.target.value); setShowSearch(true); }} placeholder="Search..." aria-label="Global search" /><kbd>⌘ K</kbd>
             {showSearch && <div className="search-popover">{globalQuery ? searchMatches.length ? searchMatches.map((match, i) => <button key={i} onClick={match.action}><Search size={14} /><span>{match.label}</span><small>{match.detail}</small></button>) : <div className="search-empty">No matching projects or modules.</div> : <div className="search-empty">Search projects and modules</div>}</div>}
           </div>
-          <div className="topbar-popover-wrap"><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setShowNotifications((v) => !v)}><Bell size={18} /><i /></button>{showNotifications && <div className="notification-popover"><strong>Notifications</strong><p>You’re all caught up.</p><small>Grade alerts and live activity will be available in Step 3.</small></div>}</div>
+          <div className="topbar-popover-wrap">
+            <button className={"icon-button notification-button " + (unreadNotificationCount ? "has-unread" : "")} aria-label={unreadNotificationCount ? "Notifications, " + unreadNotificationCount + " unread" : "Notifications"} aria-expanded={showNotifications} onClick={() => setShowNotifications((v) => !v)}>
+              <Bell size={18} />{unreadNotificationCount > 0 && <span className="notification-count">{unreadNotificationCount > 9 ? "9+" : unreadNotificationCount}</span>}
+            </button>
+            {showNotifications && <div className="notification-popover" role="dialog" aria-label="Workspace updates">
+              <div className="notification-popover-header"><strong>Workspace updates</strong><button className="quiet-button" disabled={!unreadNotificationCount} onClick={() => void markAllNotificationsRead()}>Mark all read</button></div>
+              <div className="notification-tabs" role="tablist" aria-label="Update type">
+                <button role="tab" aria-selected={notificationTab === "notifications"} className={notificationTab === "notifications" ? "active" : ""} onClick={() => setNotificationTab("notifications")}>Notifications{unreadNotificationCount > 0 && <b>{unreadNotificationCount}</b>}</button>
+                <button role="tab" aria-selected={notificationTab === "activity"} className={notificationTab === "activity" ? "active" : ""} onClick={() => setNotificationTab("activity")}>Activity</button>
+              </div>
+              {notificationError && <div className="notification-inline-error">{notificationError}</div>}
+              <div className="notification-feed" role="log" aria-live="polite">
+                {notificationTab === "notifications" ? (notifications.length ? notifications.slice(0, 12).map((item) => <button key={item.id} className={"notification-feed-item " + (!item.read_at ? "unread" : "")} onClick={() => { void markNotificationRead(item); openActivityItem({ scan_id: activityEvents.find((event) => event.id === item.activity_event_id)?.scan_id ?? null, project_id: null }); }}>
+                  <span className={"feed-event-icon " + item.notification_type}>{item.notification_type === "scan_failed" ? <AlertCircle size={15} /> : item.notification_type === "health_drop" ? <AlertTriangle size={15} /> : <Check size={15} />}</span>
+                  <span className="feed-event-copy"><strong>{item.title}</strong><small>{item.message}</small><em>{new Date(item.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</em></span>
+                  {!item.read_at && <i className="feed-unread-dot" />}
+                </button>) : <div className="notification-empty">You’re all caught up.</div>) : (activityEvents.length ? activityEvents.slice(0, 16).map((item) => <button key={item.id} className="notification-feed-item" onClick={() => openActivityItem(item)}>
+                  <span className={"feed-event-icon " + item.event_type}>{item.event_type === "scan_failed" ? <AlertCircle size={15} /> : item.event_type === "health_drop" ? <AlertTriangle size={15} /> : item.event_type === "project_added" ? <FolderGit2 size={15} /> : <Activity size={15} />}</span>
+                  <span className="feed-event-copy"><strong>{item.title}</strong><small>{item.message}</small><em>{new Date(item.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</em></span>
+                </button>) : <div className="notification-empty">No workspace activity yet.</div>)}
+              </div>
+            </div>}
+          </div>
           <button className="icon-button" aria-label={dark ? "Switch to light theme" : "Switch to dark theme"} onClick={() => setDark((v) => !v)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
           <button className="top-user" onClick={() => changePage("settings")}><span className="profile-avatar">{(sessionEmail || "S").slice(0, 1).toUpperCase()}</span><ChevronDown size={14} /></button>
         </div>
