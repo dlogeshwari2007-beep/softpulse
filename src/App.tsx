@@ -579,6 +579,7 @@ export default function App() {
   const renderScans = () => {
     const scan = selectedScan || scans[0];
     const project = scan ? getProject(projects, scan.project_id) : undefined;
+    const scanModules = scan ? modules.filter((module) => module.scan_id === scan.id) : [];
     return <div className="page-stack">
       {scan ? <>
         <div className="scan-detail-header card">
@@ -595,10 +596,10 @@ export default function App() {
         <div className="content-grid scan-results-grid">
           <div className="card results-score-card"><div className="eyebrow muted">HEALTH SCORE</div><ScoreGauge score={scan.health_score ?? 87} /><p>Score combines the 12 normalised code-quality metrics using the weights in Settings.</p></div>
           <div className="card results-overview"><div className="card-heading"><div><h2>Assessment summary</h2><p>Current results from the selected scan.</p></div></div><div className="summary-stat-grid">
-            <div><strong>12</strong><span>Metrics measured</span></div><div><strong>{modules.length}</strong><span>Modules analysed</span></div><div><strong>{modules.filter((m) => m.risk === "high").length}</strong><span>High-risk modules</span></div><div><strong>{modules.reduce((sum, m) => sum + m.estimated_refactor_hours, 0)}h</strong><span>Refactoring estimate</span></div>
+            <div><strong>12</strong><span>Metrics measured</span></div><div><strong>{scanModules.length}</strong><span>Modules analysed</span></div><div><strong>{scanModules.filter((m) => m.risk === "high").length}</strong><span>High-risk modules</span></div><div><strong>{scanModules.reduce((sum, m) => sum + m.estimated_refactor_hours, 0)}h</strong><span>Refactoring estimate</span></div>
           </div><div className="plain-explain"><Sparkles size={16} /><p><strong>What this means:</strong> a higher score indicates a more maintainable repository. A-grade projects score 85 or above; lower grades identify where engineering effort may have the greatest return.</p></div></div>
         </div>
-        <div className="card recent-card"><div className="card-heading"><div><h2>Modules in this assessment</h2><p>Review module health and open the full report.</p></div><button className="quiet-button" onClick={() => changePage("modules")}>Open module report <ArrowRight size={14} /></button></div><ModuleTable modules={modules.slice(0, 5)} onSelect={(m) => { setSelectedModule(m); changePage("modules"); }} /></div>
+        <div className="card recent-card"><div className="card-heading"><div><h2>Modules in this assessment</h2><p>Review module health and open the full report.</p></div><button className="quiet-button" onClick={() => changePage("modules")}>Open module report <ArrowRight size={14} /></button></div><ModuleTable modules={scanModules.slice(0, 5)} onSelect={(m) => { changePage("modules"); setSelectedModule(m); }} /></div>
       </> : <div className="card"><EmptyState icon={<Activity size={22} />} title="No scans yet" copy="Add a public GitHub repository to prepare your first assessment." /><button className="button-primary centered-button" onClick={() => changePage("projects")}>View projects</button></div>}
     </div>;
   };
