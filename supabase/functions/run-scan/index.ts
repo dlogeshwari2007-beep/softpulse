@@ -153,11 +153,13 @@ Deno.serve(async (request) => {
   }
 
   const authorization = request.headers.get("Authorization");
+  const apiKey = request.headers.get("apikey") ?? "";
   const internalSecret = Deno.env.get("SOFTPULSE_INTERNAL_WEBHOOK_SECRET") ?? "";
   const suppliedInternalSecret = request.headers.get("x-softpulse-internal-secret") ?? "";
   const internalWebhookCall = Boolean(internalSecret)
     && constantTimeEqual(suppliedInternalSecret, internalSecret)
-    && authorization === `Bearer ${serviceKey}`;
+    && constantTimeEqual(apiKey, serviceKey)
+    && !authorization;
 
   let userResult: { user: { id: string } } | null = null;
   if (!internalWebhookCall) {
@@ -239,7 +241,13 @@ Deno.serve(async (request) => {
       } else if (queuedScan.started_by !== userResult?.user?.id) {
         throw new Error("The requested scan does not belong to your account.");
       }
-      if (queuedScan.status !== "queued") throw new Error("This scan has already been claimed or is no longer available.");
+      if (queuedScan.status === "running") {
+        return new Response(JSON.stringify({ scan_id: requestedScanId, already_running: true }), {
+          status: 202,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      if (queuedScan.status !== "queued") throw new Error("This scan is no longer available.");
       scan = queuedScan;
       const { data: runningScan, error: runningError } = await serviceClient
         .from("scans")
@@ -255,7 +263,16 @@ Deno.serve(async (request) => {
         .select("*")
         .maybeSingle();
       if (runningError) throw runningError;
-      if (!runningScan) throw new Error("This scan was already claimed by another worker.");
+      if (!runningScan) {
+        const { data: claimedScan } = await serviceClient.from("scans").select("status").eq("id", requestedScanId).maybeSingle();
+        if (claimedScan?.status === "running") {
+          return new Response(JSON.stringify({ scan_id: requestedScanId, already_running: true }), {
+            status: 202,
+            headers: { ...corsHeaders, "Content-Type": "application/json" }
+          });
+        }
+        throw new Error("This scan could not be claimed by the worker.");
+      }
       scan = runningScan;
     } else {
       const { data: createdScan, error: scanError } = await serviceClient.from("scans").insert({
