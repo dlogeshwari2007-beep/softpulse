@@ -235,7 +235,6 @@ export default function App() {
   const isAdmin = demoMode || role === "admin";
   const canScan = demoMode || ["admin", "manager", "engineer"].includes(role);
   const selectedScan = scans.find((scan) => scan.id === selectedScanId) || scans[0];
-  const selectedProject = selectedScan ? getProject(projects, selectedScan.project_id) : undefined;
   const validRepoUrl = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(repoInput.trim());
   const filteredProjects = useMemo(() => projects.filter((project) => {
     const grade = project.grade || gradeFrom(project.health_score);
