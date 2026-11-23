@@ -106,13 +106,13 @@ function GradeBadge({ grade }: { grade?: string }) {
 function RiskPill({ risk }: { risk: Risk }) {
   return <span className={"risk-pill " + riskClass(risk)}><i />{risk[0].toUpperCase() + risk.slice(1)}</span>;
 }
-function ScoreGauge({ score, size = "large" }: { score: number; size?: "large" | "small" }) {
+function ScoreGauge({ score, size = "large", provisional = false }: { score: number; size?: "large" | "small"; provisional?: boolean }) {
   const grade = gradeFrom(score);
   return <div className={"score-gauge " + size}>
     <div className="gauge-track" style={{ background: "conic-gradient(rgb(var(--accent)) " + Math.max(0, Math.min(100, score)) * 3.6 + "deg, rgb(var(--border)) 0deg)" }}>
       <div className="gauge-inner"><strong>{Math.round(score)}</strong><span>/ 100</span></div>
     </div>
-    <div className="gauge-grade"><GradeBadge grade={grade} /><span>Overall health score</span></div>
+    <div className="gauge-grade">{provisional ? <span className="grade-pending">PROVISIONAL</span> : <GradeBadge grade={grade} />}<span>{provisional ? "Partial weighted score" : "Overall health score"}</span></div>
   </div>;
 }
 function Sparkline({ values }: { values: { i: number; value: number }[] }) {
@@ -467,7 +467,7 @@ export default function App() {
         };
         const runningScan: Scan = {
           id: nextId, project_id: project.id, status: "running", progress: 2,
-          current_stage: "Clone", current_file: null, health_score: 0,
+          current_stage: "Clone", current_file: null,
           commit_sha: "demo" + String(Date.now()).slice(-4),
           commit_message: "Manual SoftPulse demo assessment",
           commit_author: "Demo user", created_at: startedAt,
@@ -800,7 +800,7 @@ export default function App() {
         <div className="scan-detail-header card">
           <div className="scan-title-line">
             <div><div className="eyebrow muted">ASSESSMENT REPORT</div><h2>{project?.name || "Repository scan"}</h2><a className="repo-url" href={project?.repo_url} target="_blank" rel="noreferrer">{project?.repo_url || "Repository details unavailable"} <ExternalLink size={12} /></a></div>
-            {scan.health_score !== undefined && scan.health_score !== null ? <GradeBadge grade={scan.grade || gradeFrom(scan.health_score)} /> : <span className="grade-pending">GRADE PENDING</span>}
+            {scan.status === "completed" && scan.health_score !== undefined && scan.health_score !== null ? <GradeBadge grade={scan.grade || gradeFrom(scan.health_score)} /> : <span className="grade-pending">{scanIsActive && scan.health_score !== undefined ? "PROVISIONAL" : "GRADE PENDING"}</span>}
           </div>
           <div className="scan-meta-grid"><div><span>Scan ID</span><strong>{scan.id}</strong></div><div><span>Commit</span><strong>{(scan.commit_sha || "Pending")?.slice(0, 8)}</strong></div><div><span>Author</span><strong>{scan.commit_author || "SoftPulse"}</strong></div><div><span>Started</span><strong>{formatDate(scan.started_at || scan.created_at)}</strong></div></div>
           <div className="commit-message"><GitBranch size={15} /><span>{scan.commit_message || "Repository health assessment"}</span><span className={scan.status === "completed" ? "status-complete" : scanIsActive ? "status-running" : scan.status === "failed" ? "status-failed" : "status-cancelled"}>{scanIsActive ? <Activity size={13} /> : scan.status === "completed" ? <Check size={13} /> : <AlertCircle size={13} />}{statusLabel}</span></div>
@@ -840,7 +840,7 @@ export default function App() {
           <div className="log-footnote"><span><i /> Screen-reader announcements are enabled for new scan events.</span><span>{demoMode ? "Local demo stream" : "Supabase Realtime"}</span></div>
         </div>
         <div className="content-grid scan-results-grid">
-          <div className="card results-score-card"><div className="eyebrow muted">{scanIsActive ? "LIVE HEALTH SCORE" : "HEALTH SCORE"}</div>{scan.health_score !== undefined && scan.health_score !== null ? <ScoreGauge score={scan.health_score} /> : <div className="score-pending"><Activity size={20} /><strong>Waiting for metrics</strong><span>Your health gauge will fill as measurements arrive.</span></div>}<p>Score combines the 12 normalised code-quality metrics using the weights in Settings.</p></div>
+          <div className="card results-score-card"><div className="eyebrow muted">{scanIsActive ? "LIVE HEALTH SCORE" : "HEALTH SCORE"}</div>{scan.health_score !== undefined && scan.health_score !== null ? <ScoreGauge score={scan.health_score} provisional={scanIsActive} /> : <div className="score-pending"><Activity size={20} /><strong>Waiting for metrics</strong><span>Your health gauge will fill as measurements arrive.</span></div>}<p>Score combines the 12 normalised code-quality metrics using the weights in Settings.</p></div>
           <div className="card results-overview"><div className="card-heading"><div><h2>Assessment summary</h2><p>Current results from the selected scan.</p></div></div><div className="summary-stat-grid">
             <div><strong>{scanMetricCount || (scan.status === "completed" ? 12 : "—")}</strong><span>Metrics received</span></div><div><strong>{scanModules.length || (scanIsActive ? "—" : 0)}</strong><span>Modules analysed</span></div><div><strong>{scanModules.filter((m) => m.risk === "high").length || (scanIsActive ? "—" : 0)}</strong><span>High-risk modules</span></div><div><strong>{scanModules.reduce((sum, m) => sum + m.estimated_refactor_hours, 0) || (scanIsActive ? "—" : 0)}h</strong><span>Refactoring estimate</span></div>
           </div><div className="plain-explain"><Sparkles size={16} /><p><strong>What this means:</strong> the live score is a partial weighted score while metrics arrive. The final grade is assigned after all 12 metrics have been processed.</p></div></div>
