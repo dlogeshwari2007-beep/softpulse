@@ -3,13 +3,13 @@ import type { FormEvent, ReactNode } from "react";
 import {
   Activity, AlertCircle, AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight,
   Bell, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Code2, Eye, EyeOff,
-  ExternalLink, FileCode2, Filter, Flame, FolderGit2, Github, GitBranch, History,
+  ExternalLink, FileCode2, Flame, FolderGit2, Github, GitBranch, History,
   LayoutDashboard, LockKeyhole, LogOut, Mail, Menu, Moon, MoreHorizontal, Plus,
-  RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Sun, TrendingUp, Users,
+  RefreshCw, Search, Settings, ShieldCheck, SlidersHorizontal, Sun, Users,
   X, Download, Sparkles
 } from "lucide-react";
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
+  Area, AreaChart, CartesianGrid, Line, LineChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis
 } from "recharts";
 import { isSupabaseConfigured, supabase } from "./lib/supabase";
@@ -166,7 +166,6 @@ export default function App() {
   const [selectedScanId, setSelectedScanId] = useState("s1");
   const [compareA, setCompareA] = useState("s1");
   const [compareB, setCompareB] = useState("s3");
-  const [chartProject, setChartProject] = useState("all");
 
   useEffect(() => { document.documentElement.classList.toggle("dark", dark); }, [dark]);
   useEffect(() => {
@@ -234,8 +233,6 @@ export default function App() {
   const notify = (message: string) => setToast(message);
   const isAdmin = demoMode || role === "admin";
   const canScan = demoMode || ["admin", "manager", "engineer"].includes(role);
-  const latestScan = scans[0];
-  const latestProjectScore = latestScan?.health_score ?? 87;
   const selectedScan = scans.find((scan) => scan.id === selectedScanId) || scans[0];
   const selectedProject = selectedScan ? getProject(projects, selectedScan.project_id) : undefined;
   const validRepoUrl = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(repoInput.trim());
