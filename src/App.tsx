@@ -530,7 +530,7 @@ export default function App() {
       </section>
       <section className="card risk-preview-card">
         <div className="card-heading"><div><h2>Highest risk modules</h2><p>Start with these refactoring candidates.</p></div><button className="icon-button" aria-label="Open risk ranking" onClick={() => changePage("risks")}><ArrowRight size={17} /></button></div>
-        <div className="risk-preview-list">{topRiskModules.slice(0, 5).map((module) => <button className="risk-preview-item" key={module.id} onClick={() => { setSelectedModule(module); changePage("modules"); }}>
+        <div className="risk-preview-list">{topRiskModules.slice(0, 5).map((module) => <button className="risk-preview-item" key={module.id} onClick={() => { changePage("modules"); setSelectedModule(module); }}>
           <span className="file-icon"><FileCode2 size={16} /></span><span className="risk-file"><strong>{module.path.split("/").pop()}</strong><small>{module.path}</small></span><RiskPill risk={module.risk} />
         </button>)}</div>
         <button className="text-link" onClick={() => changePage("risks")}>See complete risk ranking <ArrowRight size={14} /></button>
