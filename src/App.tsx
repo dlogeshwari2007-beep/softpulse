@@ -195,10 +195,10 @@ export default function App() {
       if (moduleResult.error) throw moduleResult.error;
       if (roleResult.error) throw roleResult.error;
       if (metricResult.error) throw metricResult.error;
-      if (projectResult.data?.length) setProjects(projectResult.data as Project[]);
-      if (scanResult.data?.length) setScans(scanResult.data as Scan[]);
-      if (moduleResult.data?.length) setModules(moduleResult.data as Module[]);
-      if (metricResult.data?.length) setMetricRows(metricResult.data as MetricRecord[]);
+      setProjects((projectResult.data ?? []) as Project[]);
+      setScans((scanResult.data ?? []) as Scan[]);
+      setModules((moduleResult.data ?? []) as Module[]);
+      setMetricRows((metricResult.data ?? []) as MetricRecord[]);
       if (roleResult.data?.role) setRole(roleResult.data.role as Role);
 
       if (roleResult.data?.role === "admin") {
@@ -246,7 +246,12 @@ export default function App() {
   ).filter((score): score is number => typeof score === "number" && score > 0);
   const workspaceScore = workspaceScores.length
     ? Math.round(workspaceScores.reduce((sum, score) => sum + score, 0) / workspaceScores.length)
-    : (scans[0]?.health_score ?? 87);
+    : 0;
+  const latestMetricValue = (key: string, fallback: number) => {
+    if (!scans.length) return "—";
+    const row = metricRows.find((metric) => metric.scan_id === scans[0].id && metric.metric_key === key);
+    return row ? (row.raw_value ?? "N/A") : fallback;
+  };
   const trendChartData = [...scans]
     .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime())
     .slice(-8)
@@ -480,7 +485,7 @@ export default function App() {
     settings: "Understand the scoring model and workspace preferences."
   };
 
-  const renderDashboard = () => <div className="page-stack">
+  const renderDashboard = () => projects.length === 0 ? <div className="card"><EmptyState icon={<FolderGit2 size={22} />} title="Your workspace is ready" copy="Add a public GitHub repository to begin measuring code health and maintenance risk." /><button className="button-primary centered-button" onClick={() => setShowAddProject(true)}><Plus size={15} /> Add first repository</button></div> : <div className="page-stack">
     <div className="welcome-row"><div><div className="eyebrow muted">WORKSPACE OVERVIEW</div><h1>Good morning<span className="welcome-period">.</span></h1><p>Here’s the latest health pulse across your repositories.</p></div><button className="button-secondary" onClick={() => changePage("projects")}><Plus size={16} /> Add repository</button></div>
     <div className="dashboard-hero card">
       <div className="hero-score">
@@ -501,12 +506,12 @@ export default function App() {
     <div className="section-heading"><div><h2>Quality indicators</h2><p>Six core signals, each updated from the latest available assessment.</p></div><button className="quiet-button" onClick={() => changePage("settings")}>Scoring methodology <ArrowRight size={14} /></button></div>
     <div className="metric-grid">
       {[
-        ["maintainability_index", "Maintainability index", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "maintainability_index")?.raw_value ?? 86, "+5.2%", "positive", "MI"],
-        ["cyclomatic_complexity", "Cyclomatic complexity", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "cyclomatic_complexity")?.raw_value ?? 7.4, "−0.8", "positive", "CC"],
-        ["duplication_pct", "Code duplication", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "duplication_pct")?.raw_value ?? 3.8, "−1.1%", "positive", "DU"],
-        ["test_coverage_pct", "Test coverage", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "test_coverage_pct")?.raw_value ?? 78, "+6.4%", "positive", "TC"],
-        ["code_smells", "Code smells", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "code_smells")?.raw_value ?? 24, "−8", "positive", "CS"],
-        ["vulnerable_dependencies", "Vulnerable dependencies", metricRows.find((m) => m.scan_id === scans[0]?.id && m.metric_key === "vulnerable_dependencies")?.raw_value ?? 2, "No change", "neutral", "VD"]
+        ["maintainability_index", "Maintainability index", latestMetricValue("maintainability_index", 86), "+5.2%", "positive", "MI"],
+        ["cyclomatic_complexity", "Cyclomatic complexity", latestMetricValue("cyclomatic_complexity", 7.4), "−0.8", "positive", "CC"],
+        ["duplication_pct", "Code duplication", latestMetricValue("duplication_pct", 3.8), "−1.1%", "positive", "DU"],
+        ["test_coverage_pct", "Test coverage", latestMetricValue("test_coverage_pct", 78), "+6.4%", "positive", "TC"],
+        ["code_smells", "Code smells", latestMetricValue("code_smells", 24), "−8", "positive", "CS"],
+        ["vulnerable_dependencies", "Vulnerable dependencies", latestMetricValue("vulnerable_dependencies", 2), "No change", "neutral", "VD"]
       ].map((item, i) => <div className="metric-card card" key={item[0]}>
         <div className="metric-card-top"><span className="metric-symbol">{item[5]}</span><span className="metric-label">{item[1]}</span></div>
         <div className="metric-value-row"><strong>{item[2]}{item[0] === "duplication_pct" || item[0] === "test_coverage_pct" ? "%" : ""}</strong><span className={item[4] === "positive" ? "delta positive-trend" : "delta neutral-trend"}>{item[3]}</span></div>
