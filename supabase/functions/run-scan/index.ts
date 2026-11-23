@@ -332,9 +332,41 @@ Deno.serve(async (request) => {
       };
     });
 
-    const { error: moduleError } = await serviceClient.from("modules").insert(moduleRows);
+    const { data: savedModules, error: moduleError } = await serviceClient
+      .from("modules")
+      .insert(moduleRows)
+      .select("id,path");
     if (moduleError) throw moduleError;
-    const { error: metricError } = await serviceClient.from("metrics").insert(metricRows);
+
+    const moduleMetricRows = (savedModules ?? []).flatMap((savedModule: any) => {
+      const file = codeFiles.find((candidate) => candidate.path === savedModule.path);
+      if (!file) return [];
+      const moduleMaintainability = clamp(100 - file.complexity * 2 - Math.log10(Math.max(10, file.linesOfCode)) * 8 - file.smells * 0.7);
+      const moduleCommentRatio = file.linesOfCode ? file.commentLines / file.linesOfCode * 100 : 0;
+      const measurements: Record<string, { raw: number; normalized: number }> = {
+        lines_of_code: { raw: file.linesOfCode, normalized: lowerIsBetter(file.linesOfCode, 5000) },
+        cyclomatic_complexity: { raw: file.complexity, normalized: lowerIsBetter(file.complexity, 20) },
+        maintainability_index: { raw: moduleMaintainability, normalized: moduleMaintainability },
+        code_smells: { raw: file.smells, normalized: lowerIsBetter(file.smells, 35) },
+        comment_ratio: { raw: moduleCommentRatio, normalized: clamp(moduleCommentRatio / 20 * 100) },
+        function_length: { raw: file.functionLength, normalized: lowerIsBetter(file.functionLength, 100) },
+        nesting_depth: { raw: file.nestingDepth, normalized: lowerIsBetter(file.nestingDepth, 10) }
+      };
+      return Object.entries(measurements).map(([metricKey, value]) => {
+        const weight = weights.get(metricKey) ?? METRIC_DEFAULTS[metricKey] ?? 0;
+        return {
+          scan_id: scanId,
+          module_id: savedModule.id,
+          metric_key: metricKey,
+          raw_value: Number(value.raw.toFixed(2)),
+          normalized_score: Number(value.normalized.toFixed(2)),
+          weight,
+          contribution: Number((value.normalized * weight).toFixed(4))
+        };
+      });
+    });
+
+    const { error: metricError } = await serviceClient.from("metrics").insert([...metricRows, ...moduleMetricRows]);
     if (metricError) throw metricError;
     await updateStage(96, "Report");
 
